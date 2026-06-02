@@ -20,20 +20,8 @@ import {
   Sparkles,
   Database,
   AlertCircle,
-  LogIn,
-  LogOut,
-  Cloud,
-  CloudOff,
-  RefreshCw,
-  User as UserIcon,
-  CheckSquare,
-  Flame,
-  HelpCircle
+  CheckSquare
 } from 'lucide-react';
-
-import { auth, db, handleFirestoreError, OperationType, firebaseConfig } from './firebase';
-import { onAuthStateChanged, signInWithPopup, GoogleAuthProvider, signOut, User } from 'firebase/auth';
-import { collection, query, where, onSnapshot, doc, setDoc, deleteDoc, writeBatch } from 'firebase/firestore';
 
 const LOCAL_STORAGE_KEY = 'trades_desk_db_v2';
 
@@ -124,13 +112,6 @@ export default function App() {
   const [isClearingAll, setIsClearingAll] = useState(false);
   const [currentTime, setCurrentTime] = useState<string>('');
 
-  // Firebase Auth & Cloud Sync States
-  const [user, setUser] = useState<User | null>(null);
-  const [authLoading, setAuthLoading] = useState(true);
-  const [isSyncing, setIsSyncing] = useState(false);
-  const [hasOfflineUnsynced, setHasOfflineUnsynced] = useState(0);
-  const [authError, setAuthError] = useState<string | null>(null);
-
   useEffect(() => {
     const ticker = setInterval(() => {
       setCurrentTime(new Date().toLocaleTimeString(undefined, {
@@ -144,142 +125,26 @@ export default function App() {
     return () => clearInterval(ticker);
   }, []);
 
-  // Sync Auth State & Firestore snapshoting
+  // Load initially from local storage
   useEffect(() => {
-    const unsubscribeAuth = onAuthStateChanged(auth, (u) => {
-      setUser(u);
-      
-      if (u) {
-        // Authenticated user: subscribe to 'trades'
-        const q = query(
-          collection(db, 'trades'),
-          where('ownerId', '==', u.uid)
-        );
-        
-        const unsubscribeSnapshot = onSnapshot(
-          q,
-          (snapshot) => {
-            const cloudEntries: TradeEntry[] = [];
-            snapshot.forEach((docSnap) => {
-              cloudEntries.push(docSnap.data() as TradeEntry);
-            });
-            // Sort standard descending by date YYYY-MM-DD
-            cloudEntries.sort((a, b) => new Date(b.entryDate).getTime() - new Date(a.entryDate).getTime());
-            setEntries(cloudEntries);
-            setAuthLoading(false);
-          },
-          (error) => {
-            console.error("Firestore onSnapshot error:", error);
-            handleFirestoreError(error, OperationType.LIST, 'trades');
-            setAuthLoading(false);
-          }
-        );
-
-        return () => unsubscribeSnapshot();
-      } else {
-        // Offline/Unauthenticated: Read records from local storage
-        const stored = localStorage.getItem(LOCAL_STORAGE_KEY);
-        if (stored) {
-          try {
-            const parsed = JSON.parse(stored);
-            setEntries(parsed);
-          } catch (e) {
-            console.error('Failed reading entries from local cache, falling back to seed.', e);
-            setEntries(SEED_ENTRIES);
-          }
-        } else {
-          setEntries(SEED_ENTRIES);
-          localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(SEED_ENTRIES));
-        }
-        setAuthLoading(false);
-      }
-    });
-
-    return () => unsubscribeAuth();
-  }, []);
-
-  // Compute offline data backlog size
-  useEffect(() => {
-    if (user && entries.length >= 0) {
-      const stored = localStorage.getItem(LOCAL_STORAGE_KEY);
-      if (stored) {
-        try {
-          const localEntries: TradeEntry[] = JSON.parse(stored);
-          const unsynced = localEntries.filter(
-            (le) => !entries.some((ce) => ce.id === le.id)
-          );
-          setHasOfflineUnsynced(unsynced.length);
-        } catch (e) {
-          console.error(e);
-        }
+    const stored = localStorage.getItem(LOCAL_STORAGE_KEY);
+    if (stored) {
+      try {
+        const parsed = JSON.parse(stored);
+        setEntries(parsed);
+      } catch (e) {
+        console.error('Failed reading entries from local cache, falling back to seed.', e);
+        setEntries(SEED_ENTRIES);
       }
     } else {
-      setHasOfflineUnsynced(0);
+      setEntries(SEED_ENTRIES);
+      localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(SEED_ENTRIES));
     }
-  }, [user, entries]);
+  }, []);
 
   const saveToDB = (updatedEntries: TradeEntry[]) => {
     setEntries(updatedEntries);
     localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(updatedEntries));
-  };
-
-  const handleSignIn = async () => {
-    setAuthError(null);
-    const provider = new GoogleAuthProvider();
-    try {
-      await signInWithPopup(auth, provider);
-    } catch (e: any) {
-      console.error("Sign-in failed:", e);
-      setAuthError(e.message || String(e));
-    }
-  };
-
-  const handleSignOut = async () => {
-    try {
-      await signOut(auth);
-      setEntries([]);
-    } catch (e) {
-      console.error("Sign-out failed:", e);
-    }
-  };
-
-  const handleSyncOfflineData = async () => {
-    if (!user) return;
-    setIsSyncing(true);
-    try {
-      const stored = localStorage.getItem(LOCAL_STORAGE_KEY);
-      if (!stored) {
-        setIsSyncing(false);
-        return;
-      }
-      const localList: TradeEntry[] = JSON.parse(stored);
-      
-      const unsyncedList = localList.filter(
-        (ll) => !entries.some((cl) => cl.id === ll.id)
-      );
-
-      if (unsyncedList.length > 0) {
-        const batch = writeBatch(db);
-        unsyncedList.forEach((item) => {
-          const docRef = doc(db, 'trades', item.id);
-          const securedItem = {
-            ...item,
-            ownerId: user.uid
-          };
-          batch.set(docRef, securedItem);
-        });
-        await batch.commit();
-      }
-      
-      // Clean up local cache once synced
-      localStorage.removeItem(LOCAL_STORAGE_KEY);
-      setHasOfflineUnsynced(0);
-    } catch (error) {
-      console.error("Sync error:", error);
-      alert("Firestore secure sync failed. Verify security rules or connection.");
-    } finally {
-      setIsSyncing(false);
-    }
   };
 
   const handleSaveEntry = async (entryData: Omit<TradeEntry, 'id'> & { id?: string }) => {
@@ -288,43 +153,24 @@ export default function App() {
 
     const savedEntry: TradeEntry = {
       ...entryData,
-      id: targetId,
-      ...(user ? { ownerId: user.uid } : {})
+      id: targetId
     } as TradeEntry;
 
-    if (user) {
-      try {
-        const docRef = doc(db, 'trades', targetId);
-        await setDoc(docRef, savedEntry);
-      } catch (e) {
-        handleFirestoreError(e, OperationType.WRITE, `trades/${targetId}`);
-      }
+    let updated: TradeEntry[];
+    if (isEditing) {
+      updated = entries.map((e) => (e.id === targetId ? savedEntry : e));
     } else {
-      let updated: TradeEntry[];
-      if (isEditing) {
-        updated = entries.map((e) => (e.id === targetId ? savedEntry : e));
-      } else {
-        updated = [savedEntry, ...entries];
-      }
-      saveToDB(updated);
+      updated = [savedEntry, ...entries];
     }
+    saveToDB(updated);
 
     setIsFormOpen(false);
     setEditingEntry(null);
   };
 
   const handleDeleteEntry = async (id: string) => {
-    if (user) {
-      try {
-        const docRef = doc(db, 'trades', id);
-        await deleteDoc(docRef);
-      } catch (e) {
-        handleFirestoreError(e, OperationType.DELETE, `trades/${id}`);
-      }
-    } else {
-      const updated = entries.filter((e) => e.id !== id);
-      saveToDB(updated);
-    }
+    const updated = entries.filter((e) => e.id !== id);
+    saveToDB(updated);
 
     if (selectedEntry?.id === id) {
       setSelectedEntry(null);
@@ -361,54 +207,13 @@ export default function App() {
           </div>
         </div>
 
-        {/* Sync panel indicators & CTAs */}
+        {/* Navigation CTAs */}
         <div className="flex items-center gap-4">
           <div className="hidden md:flex items-center gap-1.5 text-[10px] text-slate-400 bg-geo-panel border border-geo-border px-3 py-1 rounded-sm font-mono uppercase tracking-wide">
             <span className="w-1.5 h-1.5 bg-blue-500 animate-pulse" />
             <Clock size={11} className="ml-1 text-slate-500" />
             <span>Clock: {currentTime}</span>
           </div>
-
-          {!firebaseConfig.apiKey ? (
-            <div className="flex items-center gap-1.5 text-[10px] text-yellow-500 bg-yellow-500/10 border border-yellow-500/20 px-2.5 py-1 rounded-sm font-mono uppercase tracking-wide">
-              <CloudOff size={11} className="text-yellow-500" />
-              <span>Offline Database</span>
-            </div>
-          ) : !user ? (
-            <div className="flex items-center gap-2">
-              <div className="hidden lg:flex items-center gap-1.5 text-[10px] text-slate-405 text-slate-450 bg-geo-panel border border-geo-border px-2.5 py-1 rounded-sm font-mono uppercase">
-                <CloudOff size={11} className="text-slate-500" />
-                <span>Locally Stored</span>
-              </div>
-              <button 
-                onClick={handleSignIn}
-                className="flex items-center gap-1.5 bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 border border-blue-500/30 text-xs font-bold font-mono uppercase tracking-wide px-3 h-9 rounded-sm transition-all cursor-pointer"
-              >
-                <LogIn size={13} />
-                Connect Cloud
-              </button>
-            </div>
-          ) : (
-            <div className="flex items-center gap-2">
-              <div className="hidden lg:flex items-center gap-1.5 text-[10px] text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2.5 py-1 rounded-sm font-mono uppercase">
-                <Cloud size={11} className="text-emerald-400 animate-pulse" />
-                <span>Cloud Synced</span>
-              </div>
-              <div className="flex items-center gap-2 border border-geo-border bg-geo-panel px-2.5 py-1 rounded-sm">
-                {user.photoURL ? (
-                  <img src={user.photoURL} alt={user.displayName || "User"} className="w-5 h-5 rounded-full border border-blue-500/30" referrerPolicy="no-referrer" />
-                ) : (
-                  <div className="w-5 h-5 rounded-full bg-blue-500/20 border border-blue-500/30 flex items-center justify-center">
-                    <UserIcon size={12} className="text-blue-400" />
-                  </div>
-                )}
-                <span className="text-[10px] text-slate-300 font-semibold max-w-[100px] truncate">{user.displayName || "Trader"}</span>
-                <button onClick={handleSignOut} title="Disconnect" className="text-slate-400 hover:text-red-400 p-0.5 rounded-sm transition-all ml-1 cursor-pointer">
-                  <LogOut size={13} />
-                </button>
-              </div>
-            </div>
-          )}
 
           <button
             onClick={handleAddInit}
@@ -423,56 +228,6 @@ export default function App() {
 
       {/* Main Container */}
       <main className="flex-1 max-w-7xl w-full mx-auto p-5 space-y-6 z-10">
-
-        {/* Global Alert Notification Banner */}
-        {authError && (
-          <div className="p-3.5 border border-rose-500/20 bg-rose-500/5 rounded-sm flex items-center justify-between gap-3" id="auth-error-banner">
-            <div className="flex items-center gap-2.5">
-              <AlertCircle className="text-rose-455 text-rose-400 stroke-[2] shrink-0" size={15} />
-              <p className="text-[11px] text-slate-300 font-mono leading-relaxed text-left">
-                Connection alert: {authError}
-              </p>
-            </div>
-            <button 
-              onClick={() => setAuthError(null)}
-              className="text-slate-400 hover:text-slate-205 text-[10px] font-bold font-mono uppercase bg-transparent px-2 py-1 border border-slate-700 hover:border-slate-600 rounded-sm cursor-pointer transition-colors shrink-0"
-            >
-              Dismiss
-            </button>
-          </div>
-        )}
-
-        {/* Sync Offline Backlog Notification */}
-        {user && hasOfflineUnsynced > 0 && (
-          <div className="p-3 border border-blue-500/20 bg-blue-500/5 rounded-sm flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 text-left" id="sync-migration-banner">
-            <div className="flex items-start gap-2.5">
-              <CheckSquare className="text-blue-400 stroke-[2] mt-0.5" size={16} />
-              <div>
-                <h4 className="text-xs font-bold text-slate-202 text-slate-200 uppercase tracking-widest font-mono">Unsynced offline positions detected</h4>
-                <p className="text-[11px] text-slate-450 text-slate-400 font-mono mt-0.5">
-                  You have {hasOfflineUnsynced} position {hasOfflineUnsynced === 1 ? 'record' : 'records'} logged locally. Sync them to your secure cloud database?
-                </p>
-              </div>
-            </div>
-            <button
-              onClick={handleSyncOfflineData}
-              disabled={isSyncing}
-              className="flex items-center justify-center gap-1.5 self-start sm:self-auto bg-blue-600 hover:bg-blue-700 active:bg-blue-800 disabled:bg-blue-800/40 text-white font-bold font-mono uppercase tracking-wider px-3.5 py-1.5 rounded-sm transition-colors text-xs cursor-pointer shadow-none relative h-8"
-            >
-              {isSyncing ? (
-                <>
-                  <RefreshCw size={12} className="animate-spin" />
-                  Syncing...
-                </>
-              ) : (
-                <>
-                  <Cloud size={12} />
-                  Sync to Cloud
-                </>
-              )}
-            </button>
-          </div>
-        )}
 
         {/* SECTION 1: Summary Stats Analytics */}
         <section className="space-y-4" id="stats-summary-section">
@@ -521,8 +276,8 @@ export default function App() {
       {/* Footer */}
       <footer className="border-t border-geo-border py-6 px-5 mt-12 bg-geo-header text-[11px] text-slate-500 font-mono flex flex-col md:flex-row justify-between items-center gap-4 max-w-7xl w-full mx-auto" id="app-footer">
         <p>LACC Trading Journal Desk &bull; Built under Geometric Balance architectural principles</p>
-        <p className="text-slate-650 text-slate-550 text-slate-500 uppercase tracking-wider text-[10px]">
-          {user ? `SECURE STORAGE: CLOUD FIRESTORE SYNC ACTIVE` : `LOCAL STORAGE: OFFLINE PERSISTENCE KEY-VALUE ACTIVE`}
+        <p className="text-slate-550 text-slate-500 uppercase tracking-wider text-[10px]">
+          LOCAL STORAGE: OFFLINE PERSISTENCE KEY-VALUE ACTIVE
         </p>
       </footer>
 
@@ -635,20 +390,8 @@ export default function App() {
                 </button>
                 <button
                   type="button"
-                  onClick={async () => {
-                    if (user) {
-                      try {
-                        const batch = writeBatch(db);
-                        entries.forEach((item) => {
-                          batch.delete(doc(db, 'trades', item.id));
-                        });
-                        await batch.commit();
-                      } catch (e) {
-                        handleFirestoreError(e, OperationType.DELETE, 'trades');
-                      }
-                    } else {
-                      saveToDB([]);
-                    }
+                  onClick={() => {
+                    saveToDB([]);
                     setIsClearingAll(false);
                   }}
                   className="w-1/2 h-9 bg-rose-600 hover:bg-rose-700 text-white text-[10.5px] font-bold font-mono rounded-none transition-colors uppercase cursor-pointer"
