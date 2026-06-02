@@ -7,6 +7,7 @@ import React, { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
 import { TradeEntry, AssetClassType, SideType, StatusType, EmotionType } from '../types';
 import { EMOTIONS_LIST, EMOTIONS_METADATA } from '../lib/emotions';
+import DatePicker from './DatePicker';
 import {
   X,
   Upload,
@@ -35,6 +36,7 @@ export default function TradeForm({ isOpen, onClose, onSave, initialEntry }: Tra
   const [side, setSide] = useState<SideType>('long');
   const [entryPrice, setEntryPrice] = useState<number>(0);
   const [exitPrice, setExitPrice] = useState<number | undefined>(undefined);
+  const [closedPrice, setClosedPrice] = useState<number | undefined>(undefined);
   const [quantity, setQuantity] = useState<number>(0);
   const [fees, setFees] = useState<number>(0);
   const [setup, setSetup] = useState('');
@@ -60,6 +62,7 @@ export default function TradeForm({ isOpen, onClose, onSave, initialEntry }: Tra
       setSide(initialEntry.side);
       setEntryPrice(initialEntry.entryPrice);
       setExitPrice(initialEntry.exitPrice);
+      setClosedPrice(initialEntry.closedPrice || initialEntry.exitPrice);
       setQuantity(initialEntry.quantity);
       setFees(initialEntry.fees);
       setSetup(initialEntry.setup);
@@ -80,6 +83,7 @@ export default function TradeForm({ isOpen, onClose, onSave, initialEntry }: Tra
       setSide('long');
       setEntryPrice(0);
       setExitPrice(undefined);
+      setClosedPrice(undefined);
       setQuantity(0);
       setFees(0);
       setSetup('');
@@ -100,17 +104,20 @@ export default function TradeForm({ isOpen, onClose, onSave, initialEntry }: Tra
   // Adjust status based on exit details
   useEffect(() => {
     if (status === 'open') {
-      // if exitPrice is defined, default to a closed status
-      if (exitPrice !== undefined && exitPrice > 0) {
+      // if exitPrice or closedPrice is defined, default to a closed status
+      if ((exitPrice !== undefined && exitPrice > 0) || (closedPrice !== undefined && closedPrice > 0)) {
         setStatus('win');
       }
     } else {
       // if closed status, ensure we have exit price or default
       if (exitPrice === undefined || exitPrice === 0) {
-        setExitPrice(entryPrice);
+        setExitPrice(closedPrice || entryPrice);
+      }
+      if (closedPrice === undefined || closedPrice === 0) {
+        setClosedPrice(exitPrice || entryPrice);
       }
     }
-  }, [exitPrice]);
+  }, [exitPrice, closedPrice]);
 
   // File parsing to base64 DataURL
   const processFile = (file: File) => {
@@ -188,7 +195,7 @@ export default function TradeForm({ isOpen, onClose, onSave, initialEntry }: Tra
     let calculatedPnl = 0;
     if (status !== 'open') {
       const ep = entryPrice;
-      const xp = exitPrice || entryPrice;
+      const xp = closedPrice || exitPrice || entryPrice;
       const qty = quantity;
       
       if (side === 'long') {
@@ -205,7 +212,8 @@ export default function TradeForm({ isOpen, onClose, onSave, initialEntry }: Tra
       assetClass,
       side,
       entryPrice,
-      exitPrice: status === 'open' ? undefined : (exitPrice || entryPrice),
+      exitPrice: status === 'open' ? undefined : (exitPrice || closedPrice || entryPrice),
+      closedPrice: status === 'open' ? undefined : (closedPrice || exitPrice),
       quantity,
       fees,
       pnl: status === 'open' ? 0 : calculatedPnl,
@@ -373,12 +381,12 @@ export default function TradeForm({ isOpen, onClose, onSave, initialEntry }: Tra
               <label className="block text-[9.5px] font-mono font-bold tracking-wider text-slate-500 uppercase mb-1">
                 Execution Entry Date
               </label>
-              <input
-                type="date"
-                required
+              <DatePicker
                 value={entryDate}
-                onChange={(e) => setEntryDate(e.target.value)}
-                className="w-full h-9 bg-geo-bg border border-geo-border hover:border-slate-800 focus:border-blue-500 px-3 text-[11px] font-mono text-slate-300 outline-none transition-colors"
+                onChange={(val) => setEntryDate(val)}
+                placeholder="Execution Date"
+                isClearable={false}
+                className="w-full h-9"
               />
             </div>
           </div>
@@ -388,8 +396,22 @@ export default function TradeForm({ isOpen, onClose, onSave, initialEntry }: Tra
             <motion.div
               initial={{ height: 0, opacity: 0 }}
               animate={{ height: 'auto', opacity: 1 }}
-              className="grid grid-cols-2 gap-3.5 overflow-hidden border-t border-geo-border/50 pt-3.5"
+              className="grid grid-cols-1 sm:grid-cols-3 gap-3.5 overflow-hidden border-t border-geo-border/50 pt-3.5"
             >
+              <div>
+                <label className="block text-[9.5px] font-mono font-bold tracking-wider text-slate-500 uppercase mb-1">
+                  Closed Price
+                </label>
+                <input
+                  type="number"
+                  step="any"
+                  placeholder="Exit price level"
+                  value={closedPrice || ''}
+                  onChange={(e) => setClosedPrice(Number(e.target.value) || undefined)}
+                  className="w-full h-9 bg-geo-bg border border-geo-border hover:border-slate-800 focus:border-blue-500 px-3 text-[11px] font-mono text-slate-200 outline-none transition-colors"
+                />
+              </div>
+
               <div>
                 <label className="block text-[9.5px] font-mono font-bold tracking-wider text-slate-500 uppercase mb-1">
                   Closed Exit Price
@@ -406,13 +428,14 @@ export default function TradeForm({ isOpen, onClose, onSave, initialEntry }: Tra
 
               <div>
                 <label className="block text-[9.5px] font-mono font-bold tracking-wider text-slate-500 uppercase mb-1">
-                  Closed Exit Date / Hour
+                  Closed Exit Date
                 </label>
-                <input
-                  type="date"
+                <DatePicker
                   value={exitDate || ''}
-                  onChange={(e) => setExitDate(e.target.value || undefined)}
-                  className="w-full h-9 bg-geo-bg border border-geo-border hover:border-slate-800 focus:border-blue-500 px-3 text-[11px] font-mono text-slate-300 outline-none transition-colors"
+                  onChange={(val) => setExitDate(val || undefined)}
+                  placeholder="Exit Date"
+                  isClearable={true}
+                  className="w-full h-9"
                 />
               </div>
             </motion.div>
@@ -422,7 +445,7 @@ export default function TradeForm({ isOpen, onClose, onSave, initialEntry }: Tra
           <div className="grid grid-cols-3 gap-3 border-y border-geo-border/60 py-3.5">
             <div>
               <label className="block text-[9px] font-mono font-bold tracking-wider text-slate-500 uppercase mb-1">
-                Assigned Price *
+                Entry Price *
               </label>
               <input
                 type="number"
@@ -437,7 +460,7 @@ export default function TradeForm({ isOpen, onClose, onSave, initialEntry }: Tra
 
             <div>
               <label className="block text-[9px] font-mono font-bold tracking-wider text-slate-500 uppercase mb-1">
-                Volume Qty *
+                Qty *
               </label>
               <input
                 type="number"

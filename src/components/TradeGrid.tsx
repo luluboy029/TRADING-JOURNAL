@@ -6,6 +6,7 @@
 import React, { useState, useMemo } from 'react';
 import { TradeEntry, AssetClassType, SideType, StatusType, EmotionType } from '../types';
 import { EMOTIONS_METADATA } from '../lib/emotions';
+import DatePicker from './DatePicker';
 import {
   Search,
   Calendar,
@@ -46,6 +47,8 @@ export default function TradeGrid({ entries, onSelect, onEdit, onDelete }: Trade
   const [sideFilter, setSideFilter] = useState<string>('all');
   const [setupFilter, setSetupFilter] = useState<string>('all');
   const [emotionFilter, setEmotionFilter] = useState<string>('all');
+  const [startDateFilter, setStartDateFilter] = useState<string>('');
+  const [endDateFilter, setEndDateFilter] = useState<string>('');
   const [sortBy, setSortBy] = useState<string>('date-desc'); // date-desc, date-asc, pnl-desc, pnl-asc
   const [isFilterExpanded, setIsFilterExpanded] = useState(false);
 
@@ -75,8 +78,10 @@ export default function TradeGrid({ entries, onSelect, onEdit, onDelete }: Trade
         const matchesSide = sideFilter === 'all' || e.side === sideFilter;
         const matchesSetup = setupFilter === 'all' || e.setup === setupFilter;
         const matchesEmotion = emotionFilter === 'all' || e.emotion === emotionFilter;
+        const matchesStartDate = !startDateFilter || e.entryDate >= startDateFilter;
+        const matchesEndDate = !endDateFilter || e.entryDate <= endDateFilter;
 
-        return matchesSearch && matchesStatus && matchesAsset && matchesSide && matchesSetup && matchesEmotion;
+        return matchesSearch && matchesStatus && matchesAsset && matchesSide && matchesSetup && matchesEmotion && matchesStartDate && matchesEndDate;
       })
       .sort((a, b) => {
         const aNet = (a.pnl || 0) - (a.fees || 0);
@@ -93,7 +98,7 @@ export default function TradeGrid({ entries, onSelect, onEdit, onDelete }: Trade
         }
         return 0;
       });
-  }, [entries, search, statusFilter, assetFilter, sideFilter, setupFilter, emotionFilter, sortBy]);
+  }, [entries, search, statusFilter, assetFilter, sideFilter, setupFilter, emotionFilter, startDateFilter, endDateFilter, sortBy]);
 
   return (
     <div className="space-y-4" id="trading-positions-hub">
@@ -124,7 +129,7 @@ export default function TradeGrid({ entries, onSelect, onEdit, onDelete }: Trade
 
         {/* Expandable detailed Filters */}
         {isFilterExpanded && (
-          <div className="grid grid-cols-2 md:grid-cols-6 gap-3 border-t border-geo-border pt-3.5 text-left text-[10.5px] font-mono animate-fade-in">
+          <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3 border-t border-geo-border pt-3.5 text-left text-[10.5px] font-mono animate-fade-in">
             <div>
               <label className="block text-slate-550 text-slate-500 mb-1 uppercase text-[8.5px] tracking-wider">Asset Class</label>
               <select
@@ -202,7 +207,27 @@ export default function TradeGrid({ entries, onSelect, onEdit, onDelete }: Trade
               </select>
             </div>
 
-            <div className="col-span-2 md:col-span-1">
+            <div>
+              <label className="block text-slate-550 text-slate-500 mb-1 uppercase text-[8.5px] tracking-wider">From Date</label>
+              <DatePicker
+                value={startDateFilter}
+                onChange={setStartDateFilter}
+                placeholder="Start Date"
+                className="w-full h-8"
+              />
+            </div>
+
+            <div>
+              <label className="block text-slate-550 text-slate-500 mb-1 uppercase text-[8.5px] tracking-wider">To Date</label>
+              <DatePicker
+                value={endDateFilter}
+                onChange={setEndDateFilter}
+                placeholder="End Date"
+                className="w-full h-8"
+              />
+            </div>
+
+            <div>
               <label className="block text-slate-550 text-slate-500 mb-1 uppercase text-[8.5px] tracking-wider">Sort Ledger</label>
               <select
                 value={sortBy}

@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React from 'react';
-import { motion } from 'motion/react';
+import React, { useState } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
 import { TradeEntry } from '../types';
 import { EMOTIONS_METADATA } from '../lib/emotions';
 import {
@@ -39,6 +39,8 @@ const formatUSD = (val: number) => {
 
 export default function TradeDetailModal({ entry, onClose, onEdit, onDelete }: TradeDetailModalProps) {
   if (!entry) return null;
+
+  const [selectedPreviewImage, setSelectedPreviewImage] = useState<string | null>(null);
 
   const netPnl = (entry.pnl || 0) - (entry.fees || 0);
   const isGain = entry.status === 'win';
@@ -125,27 +127,33 @@ export default function TradeDetailModal({ entry, onClose, onEdit, onDelete }: T
           </div>
 
           {/* Row C: Main Financial metrics metrics */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 border-y border-geo-border py-4 font-mono">
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 border-y border-geo-border py-4 font-mono">
             <div>
-              <span className="text-[9px] text-slate-500 uppercase block">Entry Price</span>
+              <span className="text-[9px] text-slate-500 uppercase block font-bold text-slate-400">Entry Price</span>
               <span className="text-xs font-bold text-slate-205 text-slate-100 block mt-0.5">
                 {formatUSD(entry.entryPrice)}
               </span>
             </div>
             <div>
-              <span className="text-[9px] text-slate-500 uppercase block">Exit Price</span>
+              <span className="text-[9px] text-slate-500 uppercase block font-bold text-slate-400">Closed Price</span>
+              <span className="text-xs font-bold text-blue-400 block mt-0.5 font-sans">
+                {entry.closedPrice ? formatUSD(entry.closedPrice) : 'Position Open'}
+              </span>
+            </div>
+            <div>
+              <span className="text-[9px] text-slate-500 uppercase block font-bold text-slate-400">Exit Price</span>
               <span className="text-xs font-bold text-slate-205 text-slate-100 block mt-0.5">
                 {entry.exitPrice ? formatUSD(entry.exitPrice) : 'Position Open'}
               </span>
             </div>
             <div>
-              <span className="text-[9px] text-slate-500 uppercase block">Quantity</span>
+              <span className="text-[9px] text-slate-500 uppercase block font-bold text-slate-400">Qty</span>
               <span className="text-xs font-bold text-slate-205 text-slate-100 block mt-0.5">
                 {entry.quantity}
               </span>
             </div>
             <div>
-              <span className="text-[9px] text-slate-500 uppercase block">Brokerage Fees</span>
+              <span className="text-[9px] text-slate-500 uppercase block font-bold text-slate-400">Brokerage Fees</span>
               <span className="text-xs font-bold text-rose-455 text-rose-400 block mt-0.5">
                 {formatUSD(entry.fees)}
               </span>
@@ -272,27 +280,28 @@ export default function TradeDetailModal({ entry, onClose, onEdit, onDelete }: T
               <span className="text-[9px] font-mono tracking-widest text-slate-400 uppercase font-bold flex items-center gap-1">
                 <Eye size={11} className="text-blue-400" /> Position Screenshots Proofs ({entry.screenshots ? entry.screenshots.length : 1})
               </span>
+              <p className="text-[10px] text-slate-500 font-mono italic">Click any image to enlarge and view within the same page</p>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
                 {entry.screenshot && (
                   <div className="border border-geo-border overflow-hidden bg-slate-950/80 p-1 rounded-sm flex flex-col justify-between">
                     <img
                       src={entry.screenshot}
                       alt="Primary position blueprint screenshot"
-                      className="w-full h-auto max-h-[180px] object-cover hover:scale-[1.02] transition-transform duration-200"
+                      onClick={() => setSelectedPreviewImage(entry.screenshot!)}
+                      className="w-full h-auto max-h-[180px] object-cover hover:scale-[1.02] transition-transform duration-200 cursor-pointer"
                       referrerPolicy="no-referrer"
                       onError={(e) => {
                         (e.target as HTMLElement).style.display = 'none';
                       }}
                     />
-                    <a
-                      href={entry.screenshot}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-[8px] font-mono text-blue-400 hover:underline flex items-center gap-1.5 justify-center mt-2"
+                    <button
+                      type="button"
+                      onClick={() => setSelectedPreviewImage(entry.screenshot!)}
+                      className="text-[8px] font-mono text-blue-400 hover:underline flex items-center gap-1.5 justify-center mt-2 bg-transparent border-0 cursor-pointer pb-1"
                     >
-                      <span>Open image in new Tab</span>
-                      <ExternalLink size={10} />
-                    </a>
+                      <span>Enlarge inline overview</span>
+                      <Eye size={10} />
+                    </button>
                   </div>
                 )}
                 {entry.screenshots && entry.screenshots.map((s, idx) => {
@@ -302,21 +311,21 @@ export default function TradeDetailModal({ entry, onClose, onEdit, onDelete }: T
                       <img
                         src={s}
                         alt={`Supporting screenshot #${idx + 1}`}
-                        className="w-full h-auto max-h-[180px] object-cover hover:scale-[1.02] transition-transform duration-200"
+                        onClick={() => setSelectedPreviewImage(s)}
+                        className="w-full h-auto max-h-[180px] object-cover hover:scale-[1.02] transition-transform duration-200 cursor-pointer"
                         referrerPolicy="no-referrer"
                         onError={(e) => {
                           (e.target as HTMLElement).style.display = 'none';
                         }}
                       />
-                      <a
-                        href={s}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-[8px] font-mono text-blue-400 hover:underline flex items-center gap-1.5 justify-center mt-2"
+                      <button
+                        type="button"
+                        onClick={() => setSelectedPreviewImage(s)}
+                        className="text-[8px] font-mono text-blue-400 hover:underline flex items-center gap-1.5 justify-center mt-2 bg-transparent border-0 cursor-pointer pb-1"
                       >
-                        <span>Open image #{idx + 1} in new Tab</span>
-                        <ExternalLink size={10} />
-                      </a>
+                        <span>Enlarge supporting screen #{idx + 1}</span>
+                        <Eye size={10} />
+                      </button>
                     </div>
                   );
                 })}
@@ -358,6 +367,35 @@ export default function TradeDetailModal({ entry, onClose, onEdit, onDelete }: T
             Close Position
           </button>
         </div>
+
+        {/* Inline Lightbox Component */}
+        <AnimatePresence>
+          {selectedPreviewImage && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setSelectedPreviewImage(null)}
+              className="fixed inset-0 bg-black/90 z-[9999] flex items-center justify-center p-4 backdrop-blur-md cursor-zoom-out"
+            >
+              <button
+                onClick={() => setSelectedPreviewImage(null)}
+                className="absolute top-4 right-4 bg-slate-900 border border-slate-700 p-2 text-white hover:text-blue-400 rounded-sm cursor-pointer transition-colors"
+              >
+                <X size={18} />
+              </button>
+              <motion.img
+                initial={{ scale: 0.95 }}
+                animate={{ scale: 1 }}
+                exit={{ scale: 0.95 }}
+                src={selectedPreviewImage}
+                alt="Expanded position preview screen"
+                className="max-w-full max-h-[90vh] object-contain shadow-2xl border border-geo-border"
+                referrerPolicy="no-referrer"
+              />
+            </motion.div>
+          )}
+        </AnimatePresence>
 
       </motion.div>
     </div>

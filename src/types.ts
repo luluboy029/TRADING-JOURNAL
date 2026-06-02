@@ -30,6 +30,7 @@ export interface TradeEntry {
   targetPrice?: number;
   stopLoss?: number;
   emotion?: EmotionType;
+  closedPrice?: number;
 }
 
 export interface TradeStats {

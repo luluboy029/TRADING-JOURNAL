@@ -234,7 +234,7 @@ export default function App() {
           <div className="flex items-center justify-between">
             <div className="text-left">
               <h2 className="text-xs font-bold text-slate-202 text-slate-200 uppercase tracking-widest font-display flex items-center gap-2">
-                <Sparkles size={14} className="text-blue-400" /> Executive Financial &amp; Strategy Desk
+                <Sparkles size={14} className="text-blue-400" /> Strategy Desk
               </h2>
               <p className="text-[11px] text-slate-400 font-mono mt-1">Real-time yields, win rates, playbook strategy efficacy, and cumulative asset curve graphics</p>
             </div>
