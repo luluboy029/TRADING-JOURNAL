@@ -1,0 +1,8 @@
+{
+  "name": "LACC Trading Journal",
+  "description": "A professional trading journal with screenshot uploads, detailed stats, interactive equity analytics, and setup categories.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

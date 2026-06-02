@@ -1,0 +1,19 @@
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  --font-display: "Space Grotesk", sans-serif;
+
+  /* Custom palette matching Geometric Balance theme */
+  --color-geo-bg: #0A0C10;
+  --color-geo-panel: #14171C;
+  --color-geo-header: #0F1115;
+  --color-geo-border: #23272F;
+}
+
+body {
+  background-color: var(--color-geo-bg);
+  color: #e2e8f0;
+}
