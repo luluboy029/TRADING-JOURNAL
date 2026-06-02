@@ -3,57 +3,47 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-export type AssetClass = 'Crypto' | 'Forex' | 'Stocks' | 'Commodities' | 'Options';
+export type AssetClassType = 'Crypto' | 'Forex' | 'Stocks' | 'Commodities' | 'Options';
+export type SideType = 'long' | 'short';
+export type StatusType = 'win' | 'loss' | 'breakeven' | 'open';
+export type EmotionType = 'Disciplined' | 'FOMO' | 'Greed' | 'Fear' | 'Patient' | 'Anxious' | 'Revenge' | 'Overconfident';
 
-export type TradeStatus = 'win' | 'loss' | 'breakeven' | 'open';
-
-export type TradeSide = 'long' | 'short';
-
-export interface Trade {
+export interface TradeEntry {
   id: string;
+  ownerId?: string;
   symbol: string;
-  assetClass: AssetClass;
-  side: TradeSide;
+  assetClass: AssetClassType;
+  side: SideType;
   entryPrice: number;
   exitPrice?: number;
   quantity: number;
-  pnl?: number; // Manual or auto-estimated net profit/loss
+  pnl?: number;
   fees: number;
   setup: string;
-  entryDate: string; // ISO DateTime
-  exitDate?: string; // ISO DateTime
-  status: TradeStatus;
-  screenshot?: string; // base64 Data URL (legacy)
-  screenshots?: string[]; // Multiple base64 Data URLs
+  entryDate: string; // YYYY-MM-DD
+  exitDate?: string;  // YYYY-MM-DD
+  status: StatusType;
+  screenshot?: string;
+  screenshots?: string[];
   notes: string;
-  riskAmount?: number; // USD amount risked
-  targetPrice?: number; // Target price
-  stopLoss?: number; // Absolute stop loss
+  riskAmount?: number;
+  targetPrice?: number;
+  stopLoss?: number;
+  emotion?: EmotionType;
 }
 
-export interface DayPnL {
-  date: string;
-  pnl: number;
-  tradeCount: number;
-}
-
-export interface SetupStats {
-  setup: string;
+export interface TradeStats {
+  netProfit: number;
+  grossProfit: number;
+  grossLoss: number;
   winRate: number;
-  pnl: number;
   totalTrades: number;
-}
-
-export interface TradingStats {
-  totalTrades: number;
+  winningTrades: number;
+  losingTrades: number;
+  breakevenTrades: number;
   openTrades: number;
-  winRate: number; // percentage
-  profitFactor: number; // gross profits / gross losses
-  netPnL: number;
   totalFees: number;
-  avgWin: number;
-  avgLoss: number;
-  bestTrade: number;
-  worstTrade: number;
-  avgHoldingTime: string; // string-formatted info
+  averageWin: number;
+  averageLoss: number;
+  profitFactor: number;
 }

@@ -3,548 +3,471 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
-import { Trade } from '../types';
+import React, { useMemo } from 'react';
+import { TradeEntry } from '../types';
+import { TrendingUp, Award, Layers, BarChart3, PieChart } from 'lucide-react';
+import { EMOTIONS_METADATA } from '../lib/emotions';
 
-interface ChartProps {
-  trades: Trade[];
+interface AnalyticsChartsProps {
+  entries: TradeEntry[];
 }
 
-// Helper: Formatter for currency
 const formatUSD = (val: number) => {
   return new Intl.NumberFormat('en-US', {
     style: 'currency',
     currency: 'USD',
-    minimumFractionDigits: 0,
     maximumFractionDigits: 0,
   }).format(val);
 };
 
-export function EquityCurveChart({ trades }: ChartProps) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const [dimensions, setDimensions] = useState({ width: 600, height: 280 });
-  const [hoverIndex, setHoverIndex] = useState<number | null>(null);
-
-  // Resize listener
-  useEffect(() => {
-    if (!containerRef.current) return;
-    const observer = new ResizeObserver((entries) => {
-      if (!entries || entries.length === 0) return;
-      const { width, height } = entries[0].contentRect;
-      setDimensions({
-        width: Math.max(width, 300),
-        height: Math.max(height || 280, 200),
-      });
-    });
-    observer.observe(containerRef.current);
-    return () => observer.disconnect();
-  }, []);
-
-  const closedTrades = useMemo(() => {
-    return [...trades]
-      .filter((t) => t.status !== 'open')
+export default function AnalyticsCharts({ entries }: AnalyticsChartsProps) {
+  // 1. Cumulative Equity Curve Data
+  const equityData = useMemo(() => {
+    const sorted = [...entries]
+      .filter((e) => e.status !== 'open')
       .sort((a, b) => new Date(a.entryDate).getTime() - new Date(b.entryDate).getTime());
-  }, [trades]);
 
-  const pnlData = useMemo(() => {
-    let cumulative = 0;
-    const points = [{ balance: 0, trade: null as Trade | null, date: 'Start' }];
-    closedTrades.forEach((t) => {
-      cumulative += (t.pnl ?? 0) - (t.fees ?? 0);
-      points.push({
-        balance: cumulative,
-        trade: t,
-        date: new Date(t.entryDate).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),
-      });
+    let runningSum = 0;
+    return sorted.map((e) => {
+      const pnl = e.pnl || 0;
+      const fees = e.fees || 0;
+      runningSum += pnl - fees;
+      return {
+        date: e.entryDate,
+        pnl: pnl - fees,
+        cumulative: runningSum,
+        symbol: e.symbol,
+      };
     });
-    return points;
-  }, [closedTrades]);
+  }, [entries]);
 
-  // Dimensions of graph padding
-  const padding = { top: 30, right: 20, bottom: 40, left: 60 };
-  const graphWidth = dimensions.width - padding.left - padding.right;
-  const graphHeight = dimensions.height - padding.top - padding.bottom;
-
-  // Min and Max values for scale
-  const { minVal, maxVal } = useMemo(() => {
-    if (pnlData.length === 0) return { minVal: -100, maxVal: 100 };
-    const balances = pnlData.map((d) => d.balance);
-    const min = Math.min(...balances, 0);
-    const max = Math.max(...balances, 0);
-    const paddingVal = Math.max((max - min) * 0.15, 100);
-    return {
-      minVal: min - paddingVal,
-      maxVal: max + paddingVal,
-    };
-  }, [pnlData]);
-
-  // Coordinate conversion helper
-  const getX = (index: number) => {
-    if (pnlData.length <= 1) return padding.left;
-    return padding.left + (index / (pnlData.length - 1)) * graphWidth;
-  };
-
-  const getY = (val: number) => {
-    const range = maxVal - minVal;
-    if (range === 0) return padding.top + graphHeight / 2;
-    return padding.top + graphHeight - ((val - minVal) / range) * graphHeight;
-  };
-
-  // Generate path string
-  const pathString = useMemo(() => {
-    if (pnlData.length === 0) return '';
-    return pnlData
-      .map((d, i) => `${i === 0 ? 'M' : 'L'} ${getX(i)} ${getY(d.balance)}`)
-      .join(' ');
-  }, [pnlData, dimensions, minVal, maxVal]);
-
-  // Generate closed area string for visual fill
-  const areaString = useMemo(() => {
-    if (pnlData.length === 0) return '';
-    const linePath = pathString;
-    return `${linePath} L ${getX(pnlData.length - 1)} ${getY(minVal)} L ${getX(0)} ${getY(minVal)} Z`;
-  }, [pnlData, pathString, dimensions, minVal, maxVal]);
-
-  // Zero-line Y coordinate
-  const zeroY = getY(0);
-
-  // Mouse interactivity triggers
-  const handleMouseMove = (e: React.MouseEvent<SVGSVGElement, MouseEvent>) => {
-    if (pnlData.length === 0) return;
-    const svgRect = e.currentTarget.getBoundingClientRect();
-    const mouseX = e.clientX - svgRect.left;
-
-    // Find nearest point
-    let closestIndex = 0;
-    let minDistance = Infinity;
-
-    for (let i = 0; i < pnlData.length; i++) {
-      const ptX = getX(i);
-      const dist = Math.abs(ptX - mouseX);
-      if (dist < minDistance) {
-        minDistance = dist;
-        closestIndex = i;
+  // 2. Breakdown by Asset Class
+  const assetBreakdown = useMemo(() => {
+    const map: Record<string, { grossProfit: number; grossLoss: number; totalTrades: number; winning: number }> = {};
+    
+    entries.forEach((e) => {
+      if (!map[e.assetClass]) {
+        map[e.assetClass] = { grossProfit: 0, grossLoss: 0, totalTrades: 0, winning: 0 };
       }
-    }
+      const data = map[e.assetClass];
+      data.totalTrades++;
+      
+      if (e.status === 'win') {
+        data.winning++;
+        data.grossProfit += (e.pnl || 0) - (e.fees || 0);
+      } else if (e.status === 'loss') {
+        data.grossLoss += Math.abs((e.pnl || 0) + (e.fees || 0));
+      } else if (e.status === 'breakeven') {
+        data.grossLoss += e.fees || 0;
+      }
+    });
 
-    setHoverIndex(closestIndex);
-  };
+    return Object.keys(map).map((key) => {
+      const val = map[key];
+      const net = val.grossProfit - val.grossLoss;
+      const winRate = val.totalTrades > 0 ? (val.winning / val.totalTrades) * 100 : 0;
+      return {
+        assetClass: key,
+        net,
+        winRate,
+        total: val.totalTrades,
+      };
+    }).sort((a, b) => b.net - a.net);
+  }, [entries]);
 
-  const handleMouseLeave = () => {
-    setHoverIndex(null);
-  };
+  // 3. Setup Strategy performance list
+  const setupBreakdown = useMemo(() => {
+    const map: Record<string, { net: number; win: number; total: number }> = {};
+    entries.forEach((e) => {
+      const setup = e.setup || 'Unspecified';
+      if (!map[setup]) {
+        map[setup] = { net: 0, win: 0, total: 0 };
+      }
+      const data = map[setup];
+      data.total++;
+      if (e.status === 'win') {
+        data.win++;
+        data.net += (e.pnl || 0) - (e.fees || 0);
+      } else if (e.status === 'loss') {
+        data.net += (e.pnl || 0) - (e.fees || 0);
+      } else if (e.status === 'breakeven') {
+        data.net -= e.fees || 0;
+      }
+    });
 
-  if (trades.filter((t) => t.status !== 'open').length === 0) {
-    return (
-      <div className="flex flex-col items-center justify-center h-64 bg-geo-panel border border-geo-border rounded-sm px-4 text-center">
-        <p className="text-sm text-slate-400 font-mono">No transactions completed yet</p>
-        <span className="text-xs text-slate-500 mt-2 font-mono">Complete closed trades in journal to construct your equity growth progression</span>
-      </div>
-    );
-  }
+    return Object.keys(map).map((key) => {
+      const val = map[key];
+      const wr = val.total > 0 ? (val.win / val.total) * 100 : 0;
+      return {
+        setup: key,
+        net: val.net,
+        winRate: wr,
+        total: val.total,
+      };
+    }).sort((a, b) => b.net - a.net);
+  }, [entries]);
 
-  // Hover data point info
-  const hoverPoint = hoverIndex !== null ? pnlData[hoverIndex] : null;
+  // 4. Breakdown by Psychological Emotion
+  const emotionBreakdown = useMemo(() => {
+    const map: Record<string, { net: number; win: number; total: number }> = {};
+    entries.forEach((e) => {
+      if (!e.emotion) return; // Ignore un-tagged trades
+      const emo = e.emotion;
+      if (!map[emo]) {
+        map[emo] = { net: 0, win: 0, total: 0 };
+      }
+      const data = map[emo];
+      data.total++;
+      if (e.status === 'win') {
+        data.win++;
+        data.net += (e.pnl || 0) - (e.fees || 0);
+      } else if (e.status === 'loss') {
+        data.net += (e.pnl || 0) - (e.fees || 0);
+      } else if (e.status === 'breakeven') {
+        data.net -= e.fees || 0;
+      }
+    });
+
+    return Object.keys(map).map((key) => {
+      const val = map[key];
+      const wr = val.total > 0 ? (val.win / val.total) * 100 : 0;
+      return {
+        emotion: key,
+        net: val.net,
+        winRate: wr,
+        total: val.total,
+      };
+    }).sort((a, b) => b.net - a.net);
+  }, [entries]);
+
+  // SVG dimensions for equity curve
+  const width = 500;
+  const height = 180;
+  const padding = 25;
+
+  const svgPoints = useMemo(() => {
+    if (equityData.length === 0) return '';
+    const values = equityData.map((d) => d.cumulative);
+    const minVal = Math.min(0, ...values);
+    const maxVal = Math.max(100, ...values);
+
+    const xRange = equityData.length > 1 ? equityData.length - 1 : 1;
+    const yRange = maxVal - minVal || 1;
+
+    return equityData
+      .map((d, index) => {
+        const x = padding + (index / xRange) * (width - 2 * padding);
+        const y = height - padding - ((d.cumulative - minVal) / yRange) * (height - 2 * padding);
+        return `${x.toFixed(1)},${y.toFixed(1)}`;
+      })
+      .join(' ');
+  }, [equityData]);
+
+  // Generate ticks for equity Y-axis
+  const equityYTicks = useMemo(() => {
+    if (equityData.length === 0) return [0];
+    const values = equityData.map((d) => d.cumulative);
+    const minVal = Math.min(0, ...values);
+    const maxVal = Math.max(100, ...values);
+    const midVal = (minVal + maxVal) / 2;
+    return [minVal, midVal, maxVal];
+  }, [equityData]);
 
   return (
-    <div className="w-full bg-geo-panel border border-geo-border rounded-sm p-5 relative flex flex-col justify-between" id="equity-curve-card">
-      <div className="flex items-center justify-between mb-4">
+    <div className="grid grid-cols-1 lg:grid-cols-3 gap-4" id="analytics-charts-row">
+      
+      {/* Chart 1: Equity Curve (Pure responsive Custom SVG representation) */}
+      <div className="lg:col-span-2 bg-geo-panel border border-geo-border p-4 rounded-sm flex flex-col justify-between text-left">
         <div>
-          <h3 className="text-xs font-bold text-slate-200 uppercase tracking-wider font-display">Equity Growth Profile</h3>
-          <p className="text-[11px] text-slate-400 font-mono">Net cumulative yield progression over closed positions</p>
+          <span className="text-[10px] font-mono font-bold tracking-widest text-slate-400 uppercase flex items-center gap-1.5">
+            <TrendingUp size={12} className="text-blue-500" /> Real-time Equity Curve (Cumulative P&amp;L)
+          </span>
+          <p className="text-[9.5px] text-slate-500 font-mono mt-0.5">Chronological trade performance ledger including brokerage transaction fees</p>
         </div>
-        {hoverPoint && (
-          <motion.div
-            initial={{ opacity: 0, x: 10 }}
-            animate={{ opacity: 1, x: 0 }}
-            className="text-right"
-          >
-            <span className="text-[10px] text-slate-400 block font-mono">{hoverPoint.date}</span>
-            <span className={`text-sm font-bold font-mono ${hoverPoint.balance >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-              {formatUSD(hoverPoint.balance)}
-            </span>
-          </motion.div>
-        )}
+
+        <div className="my-3 flex-1 flex items-center justify-center min-h-[180px] w-full bg-slate-950/40 border border-slate-900/60 p-2 relative overflow-hidden">
+          {equityData.length === 0 ? (
+            <div className="text-center font-mono py-12 text-slate-550 text-[10px]">
+              No closed trade records logged for equity visualization.
+            </div>
+          ) : (
+            <svg
+              viewBox={`0 0 ${width} ${height}`}
+              className="w-full h-full text-slate-400 overflow-visible"
+              aria-label="Cumulative Net PnL Curve"
+            >
+              {/* horizontal guides */}
+              {equityYTicks.map((tick, i) => {
+                const values = equityData.map((d) => d.cumulative);
+                const minVal = Math.min(0, ...values);
+                const maxVal = Math.max(100, ...values);
+                const yRange = maxVal - minVal || 1;
+                const y = height - padding - ((tick - minVal) / yRange) * (height - 2 * padding);
+                return (
+                  <g key={i} className="opacity-40">
+                    <line
+                      x1={padding}
+                      y1={y}
+                      x2={width - padding}
+                      y2={y}
+                      stroke="#1e293b"
+                      strokeWidth={1}
+                      strokeDasharray="2 3"
+                    />
+                    <text
+                      x={padding - 5}
+                      y={y + 3}
+                      fill="#64748b"
+                      fontSize="8px"
+                      fontFamily="monospace"
+                      textAnchor="end"
+                    >
+                      {formatUSD(tick)}
+                    </text>
+                  </g>
+                );
+              })}
+
+              {/* Zero line reference */}
+              {(() => {
+                const values = equityData.map((d) => d.cumulative);
+                const minVal = Math.min(0, ...values);
+                const maxVal = Math.max(100, ...values);
+                const yRange = maxVal - minVal || 1;
+                const zeroY = height - padding - ((0 - minVal) / yRange) * (height - 2 * padding);
+                if (zeroY >= padding && zeroY <= height - padding) {
+                  return (
+                    <line
+                      x1={padding}
+                      y1={zeroY}
+                      x2={width - padding}
+                      y2={zeroY}
+                      stroke="#ef4444"
+                      strokeWidth={1}
+                      className="opacity-25"
+                    />
+                  );
+                }
+                return null;
+              })()}
+
+              {/* The Line Curve */}
+              {svgPoints && (
+                <>
+                  <polyline
+                    fill="none"
+                    stroke="#3b82f6"
+                    strokeWidth="2.5"
+                    points={svgPoints}
+                    className="drop-shadow-[0_2px_8px_rgba(59,130,246,0.3)]"
+                  />
+                  {/* Scatter plot nodes on hover or highlights */}
+                  {equityData.map((d, idx) => {
+                    const values = equityData.map((item) => item.cumulative);
+                    const minVal = Math.min(0, ...values);
+                    const maxVal = Math.max(100, ...values);
+                    const xRange = equityData.length > 1 ? equityData.length - 1 : 1;
+                    const yRange = maxVal - minVal || 1;
+
+                    const x = padding + (idx / xRange) * (width - 2 * padding);
+                    const y = height - padding - ((d.cumulative - minVal) / yRange) * (height - 2 * padding);
+
+                    return (
+                      <circle
+                        key={idx}
+                        cx={x}
+                        cy={y}
+                        r="3.5"
+                        className="fill-slate-950 stroke-blue-400 hover:r-5 cursor-pointer transition-all duration-150"
+                        strokeWidth="1.5"
+                        id={`node-${idx}`}
+                      >
+                        <title>{`${d.date}: ${formatUSD(d.cumulative)} (Net: ${formatUSD(d.pnl)}) [${d.symbol}]`}</title>
+                      </circle>
+                    );
+                  })}
+                </>
+              )}
+            </svg>
+          )}
+
+          {/* Quick info badges inside SVG */}
+          {equityData.length > 0 && (
+            <div className="absolute bottom-2.5 right-3 bg-geo-bg border border-geo-border py-0.5 px-2 rounded-sm text-[8px] font-mono text-slate-500 flex gap-2">
+              <span>{equityData[0].date}</span>
+              <span>&mdash;</span>
+              <span>{equityData[equityData.length - 1].date}</span>
+            </div>
+          )}
+        </div>
+
+        <div className="text-[9px] font-mono text-slate-550 text-slate-500 uppercase tracking-widest flex justify-between">
+          <span>Timeline Ledger</span>
+          <span>Sample Size: {equityData.length} realized positions</span>
+        </div>
       </div>
 
-      <div ref={containerRef} className="w-full h-64 relative select-none">
-        <svg
-          width={dimensions.width}
-          height={dimensions.height}
-          onMouseMove={handleMouseMove}
-          onMouseLeave={handleMouseLeave}
-          className="overflow-visible cursor-crosshair"
-          id="equity-svg"
-        >
-          <defs>
-            <linearGradient id="equity-gradient" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="#3b82f6" stopOpacity="0.2" />
-              <stop offset="100%" stopColor="#3b82f6" stopOpacity="0.0" />
-            </linearGradient>
-          </defs>
+      {/* Chart 2: Asset Class Net Performance */}
+      <div className="bg-geo-panel border border-geo-border p-4 rounded-sm flex flex-col justify-between text-left">
+        <div>
+          <span className="text-[10px] font-mono font-bold tracking-widest text-slate-400 uppercase flex items-center gap-1.5">
+            <Layers size={12} className="text-blue-500" /> Sector Volume &amp; P&amp;L
+          </span>
+          <p className="text-[9.5px] text-slate-500 font-mono mt-0.5">Asset class allocation performance metric ledger</p>
+        </div>
 
-          {/* Gridlines */}
-          {[0, 0.25, 0.5, 0.75, 1].map((ratio, i) => {
-            const tempVal = minVal + ratio * (maxVal - minVal);
-            const yCoord = getY(tempVal);
-            return (
-              <g key={i} className="opacity-100">
-                <line
-                  x1={padding.left}
-                  y1={yCoord}
-                  x2={dimensions.width - padding.right}
-                  y2={yCoord}
-                  stroke="#23272F"
-                  strokeWidth="1"
-                  strokeDasharray="2 3"
-                />
-                <text
-                  x={padding.left - 8}
-                  y={yCoord + 3}
-                  textAnchor="end"
-                  fill="#64748b"
-                  className="font-mono text-[9px]"
-                >
-                  {formatUSD(tempVal)}
-                </text>
-              </g>
-            );
-          })}
-
-          {/* Horizontal Axis Zero Reference Line */}
-          {zeroY >= padding.top && zeroY <= padding.top + graphHeight && (
-            <line
-              x1={padding.left}
-              y1={zeroY}
-              x2={dimensions.width - padding.right}
-              y2={zeroY}
-              stroke="#475569"
-              strokeWidth="1.2"
-              strokeOpacity="0.6"
-            />
-          )}
-
-          {/* Shaded Area under the Line */}
-          <path d={areaString} fill="url(#equity-gradient)" />
-
-          {/* Main Line Plot (Blue for Geo Balance Theme) */}
-          <motion.path
-            d={pathString}
-            fill="none"
-            stroke="#3b82f6"
-            strokeWidth="2"
-            strokeLinecap="square"
-            strokeLinejoin="miter"
-            initial={{ pathLength: 0 }}
-            animate={{ pathLength: 1 }}
-            transition={{ duration: 0.6, ease: 'easeOut' }}
-          />
-
-          {/* Dots on hover */}
-          {hoverIndex !== null && (
-            <>
-              {/* Vertical indicator line */}
-              <line
-                x1={getX(hoverIndex)}
-                y1={padding.top}
-                x2={getX(hoverIndex)}
-                y2={dimensions.height - padding.bottom}
-                stroke="#475569"
-                strokeWidth="1"
-                strokeDasharray="2 2"
-              />
-              {/* Active Point Circle */}
-              <circle
-                cx={getX(hoverIndex)}
-                cy={getY(pnlData[hoverIndex].balance)}
-                r="4"
-                fill="#3b82f6"
-                stroke="#0A0C10"
-                strokeWidth="2"
-                className="transition-all duration-100"
-              />
-            </>
-          )}
-
-          {/* Bottom X-Axis Date markers */}
-          {pnlData.length > 1 &&
-            [0, Math.floor(pnlData.length / 2), pnlData.length - 1].map((idx) => {
-              if (idx < 0 || idx >= pnlData.length) return null;
-              return (
-                <text
-                  key={idx}
-                  x={getX(idx)}
-                  y={dimensions.height - padding.bottom + 16}
-                  className="fill-slate-500 font-mono text-[9px]"
-                  textAnchor="middle"
-                >
-                  {pnlData[idx].date}
-                </text>
-              );
-            })}
-        </svg>
-
-        {/* Dynamic Tooltip on Hover */}
-        <AnimatePresence>
-          {hoverIndex !== null && hoverPoint && hoverPoint.trade && (
-            <motion.div
-              initial={{ opacity: 0, y: 5 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0 }}
-              style={{
-                position: 'absolute',
-                left: `${Math.min(
-                  Math.max(getX(hoverIndex) - 75, 10),
-                  dimensions.width - 160
-                )}px`,
-                top: `${Math.max(getY(hoverPoint.balance) - 95, 10)}px`,
-              }}
-              className="pointer-events-none bg-geo-header border border-geo-border text-slate-200 p-2 text-[10px] rounded-sm font-mono shadow-xl z-20 min-w-[130px]"
-              id="equity-tooltip"
-            >
-              <div className="flex justify-between items-center mb-1 font-bold border-b border-geo-border pb-1">
-                <span>{hoverPoint.trade.symbol}</span>
-                <span className={`uppercase text-[8px] px-1 rounded-sm ${hoverPoint.trade.side === 'long' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-rose-500/10 text-rose-400'}`}>
-                  {hoverPoint.trade.side}
-                </span>
-              </div>
-              <div className="space-y-0.5">
-                <div className="flex justify-between">
-                  <span className="text-slate-500 text-[9px]">PNL:</span>
-                  <span className={(hoverPoint.trade.pnl ?? 0) >= 0 ? 'text-emerald-400 font-bold' : 'text-rose-400 font-bold'}>
-                    {(hoverPoint.trade.pnl ?? 0) >= 0 ? '+' : ''}
-                    {formatUSD(hoverPoint.trade.pnl ?? 0)}
+        <div className="my-4 space-y-2.5 overflow-y-auto max-h-[180px] flex-1">
+          {assetBreakdown.length === 0 ? (
+            <div className="text-center font-mono py-12 text-slate-550 text-[10px]">
+              No ledger points.
+            </div>
+          ) : (
+            assetBreakdown.map((row) => (
+              <div key={row.assetClass} className="space-y-1">
+                <div className="flex justify-between items-center text-[10px] font-mono">
+                  <span className="text-slate-355 text-slate-300 font-bold bg-slate-950/40 px-1.5 py-0.5 border border-slate-900 rounded-sm">
+                    {row.assetClass}
+                  </span>
+                  <span className={`font-bold ${row.net >= 0 ? 'text-emerald-400' : 'text-rose-455 text-rose-400'}`}>
+                    {row.net >= 0 ? '+' : ''}
+                    {formatUSD(row.net)}
                   </span>
                 </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-500 text-[9px]">TOTAL:</span>
-                  <span className="text-slate-300 font-bold">{formatUSD(hoverPoint.balance)}</span>
+                
+                {/* Custom layout progress bars */}
+                <div className="h-2 bg-slate-950/60 border border-slate-900 overflow-hidden relative">
+                  <div
+                    className={`h-full ${row.net >= 0 ? 'bg-emerald-500/30' : 'bg-rose-500/30'}`}
+                    style={{ width: `${Math.min(100, Math.max(10, (row.total / entries.length) * 100))}%` }}
+                  />
+                  <span className="absolute inset-0 flex items-center justify-end pr-1.5 text-[7px] text-slate-550 font-mono">
+                    {row.total} trades &bull; {row.winRate.toFixed(0)}% Win
+                  </span>
                 </div>
               </div>
-            </motion.div>
+            ))
           )}
-        </AnimatePresence>
-      </div>
-    </div>
-  );
-}
-
-export function WinLossDonutChart({ trades }: ChartProps) {
-  const [activeSegment, setActiveSegment] = useState<string | null>(null);
-
-  const { wins, losses, breakevens, total, winRate } = useMemo(() => {
-    const closed = trades.filter((t) => t.status !== 'open');
-    const totalCount = closed.length;
-    if (totalCount === 0) {
-      return { wins: 0, losses: 0, breakevens: 0, total: 0, winRate: 0 };
-    }
-    const w = closed.filter((t) => t.status === 'win').length;
-    const l = closed.filter((t) => t.status === 'loss').length;
-    const b = closed.filter((t) => t.status === 'breakeven').length;
-    return {
-      wins: w,
-      losses: l,
-      breakevens: b,
-      total: totalCount,
-      winRate: Math.round((w / totalCount) * 100),
-    };
-  }, [trades]);
-
-  // Radius specs
-  const size = 180;
-  const radius = 64;
-  const strokeWidth = 14;
-  const center = size / 2;
-  const circumference = 2 * Math.PI * radius;
-
-  const data = useMemo(() => {
-    if (total === 0) return [];
-    return [
-      { name: 'Wins', value: wins, color: '#10b981', hoverColor: '#34d399' },
-      { name: 'Losses', value: losses, color: '#ef4444', hoverColor: '#f87171' },
-      { name: 'Breakeven', value: breakevens, color: '#64748b', hoverColor: '#94a3b8' },
-    ].filter((d) => d.value > 0);
-  }, [wins, losses, breakevens, total]);
-
-  // Compute values for standard layout circle dash arrays
-  let accumulatedPercent = 0;
-  const segments = data.map((d) => {
-    const percentage = d.value / total;
-    const offset = accumulatedPercent * circumference;
-    accumulatedPercent += percentage;
-
-    return {
-      ...d,
-      strokeDasharray: `${percentage * circumference} ${circumference}`,
-      strokeDashoffset: -offset,
-      percentage: Math.round(percentage * 100),
-    };
-  });
-
-  return (
-    <div className="bg-geo-panel border border-geo-border rounded-sm p-5 flex flex-col justify-between" id="distribution-chart-card">
-      <div>
-        <h3 className="text-xs font-bold text-slate-200 uppercase tracking-wider font-display">Outcome Matrix</h3>
-        <p className="text-[11px] text-slate-400 font-mono">Relative allocation of trade results</p>
-      </div>
-
-      {total === 0 ? (
-        <div className="flex items-center justify-center h-48 text-center text-slate-500 text-xs font-mono">
-          No outcome stats available
         </div>
-      ) : (
-        <div className="flex flex-col sm:flex-row items-center justify-around py-4 gap-4">
-          <div className="relative w-44 h-44 flex items-center justify-center">
-            <svg width={size} height={size} className="-rotate-90">
-              {segments.map((seg, i) => (
-                <circle
-                  key={i}
-                  cx={center}
-                  cy={center}
-                  r={radius}
-                  fill="transparent"
-                  stroke={activeSegment === seg.name ? seg.hoverColor : seg.color}
-                  strokeWidth={activeSegment === seg.name ? strokeWidth + 2 : strokeWidth}
-                  strokeDasharray={seg.strokeDasharray}
-                  strokeDashoffset={seg.strokeDashoffset}
-                  strokeLinecap="square"
-                  className="transition-all duration-200 cursor-pointer"
-                  onMouseEnter={() => setActiveSegment(seg.name)}
-                  onMouseLeave={() => setActiveSegment(null)}
-                />
-              ))}
-            </svg>
 
-            {/* Inner text metric display */}
-            <div className="absolute inset-0 flex flex-col items-center justify-center select-none" id="donut-center-metric">
-              <span className="text-slate-400 text-[9px] font-bold uppercase font-mono tracking-wider">Win Rate</span>
-              <span className="text-3xl font-bold text-emerald-400 leading-none font-mono">{winRate}%</span>
-              <span className="text-[9px] text-slate-500 mt-1 font-mono">{total} total</span>
-            </div>
+        <div className="text-[9px] font-mono text-slate-550 text-slate-500 uppercase tracking-widest flex justify-between border-t border-geo-border/40 pt-2 shrink-0">
+          <span>Active Asset Categories</span>
+          <span>{assetBreakdown.length} unique sectors</span>
+        </div>
+      </div>
+
+      {/* Chart 3: Setup Playbook Efficiency (Full Width below Row) */}
+      <div className="lg:col-span-3 bg-geo-panel border border-geo-border p-4 rounded-sm text-left">
+        <div className="mb-3">
+          <span className="text-[10px] font-mono font-bold tracking-widest text-slate-400 uppercase flex items-center gap-1.5">
+            <BarChart3 size={12} className="text-blue-500" /> Playbook Strategy Performance Analysis
+          </span>
+          <p className="text-[9.5px] text-slate-500 font-mono mt-0.5">Tracking Setup profitability, conviction, and hit-rates</p>
+        </div>
+
+        {setupBreakdown.length === 0 ? (
+          <div className="text-center font-mono py-6 text-slate-550 text-[10px]">
+            No strategy logs recorded. Assign setups to start tracking metrics.
           </div>
-
-          <div className="flex flex-col gap-2 w-full sm:w-auto min-w-[124px]" id="donut-legend">
-            {segments.map((seg, i) => (
-              <div
-                key={i}
-                className={`flex items-center justify-between p-1.5 rounded-sm border transition-colors cursor-pointer ${
-                  activeSegment === seg.name ? 'bg-geo-header border-geo-border' : 'border-transparent hover:bg-geo-header/50'
-                }`}
-                onMouseEnter={() => setActiveSegment(seg.name)}
-                onMouseLeave={() => setActiveSegment(null)}
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5 pt-1">
+            {setupBreakdown.map((row) => (
+              <div 
+                key={row.setup} 
+                className="bg-slate-950/30 border border-geo-border/60 p-3 flex flex-col justify-between hover:border-slate-800 transition-colors"
               >
-                <div className="flex items-center gap-2">
-                  <div className="w-2.5 h-2.5 rounded-none" style={{ backgroundColor: seg.color }} />
-                  <span className="text-xs text-slate-300 font-mono font-medium">{seg.name}</span>
+                <div className="flex justify-between items-start">
+                  <div>
+                    <h5 className="font-mono text-[11px] font-bold text-slate-205 text-slate-357 truncate max-w-[140px]" title={row.setup}>
+                      {row.setup}
+                    </h5>
+                    <span className="font-mono text-[8.5px] text-slate-500 block">
+                      Playbook Hit Rate: {row.winRate.toFixed(1)}% ({row.total} sample)
+                    </span>
+                  </div>
+
+                  <span className={`font-mono text-[11px] font-bold ${row.net >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                    {row.net >= 0 ? '+' : ''}
+                    {formatUSD(row.net)}
+                  </span>
                 </div>
-                <span className="text-xs font-mono font-bold text-slate-500 pl-4">{seg.value}</span>
+
+                {/* Progress bar represent hit rate visually */}
+                <div className="mt-2 text-right">
+                  <div className="h-1 w-full bg-slate-900 border border-slate-950/80 rounded-none overflow-hidden">
+                    <div
+                      className={`h-full ${row.winRate >= 50 ? 'bg-emerald-500/50' : 'bg-red-500/50'}`}
+                      style={{ width: `${row.winRate}%` }}
+                    />
+                  </div>
+                </div>
               </div>
             ))}
           </div>
+        )}
+      </div>
+
+      {/* Chart 4: Psychological State & Emotional Discipline Performance */}
+      <div className="lg:col-span-3 bg-geo-panel border border-geo-border p-4 rounded-sm text-left">
+        <div className="mb-3 flex justify-between items-center flex-wrap gap-2">
+          <div>
+            <span className="text-[10px] font-mono font-bold tracking-widest text-slate-400 uppercase flex items-center gap-1.5">
+              <PieChart size={12} className="text-violet-400 animate-pulse" /> Psychology &amp; Mindset Efficiency Analytics
+            </span>
+            <p className="text-[9.5px] text-slate-500 font-mono mt-0.5">Assesses how emotional states impact financial yield and win probability rates</p>
+          </div>
+          
+          <span className="text-[9px] font-mono font-bold bg-violet-500/10 text-violet-400 border border-violet-500/20 px-2 py-0.5 rounded-sm uppercase tracking-wider">
+            Mindset yield tracker
+          </span>
         </div>
-      )}
-    </div>
-  );
-}
 
-export function SetupBreakdownBarChart({ trades }: ChartProps) {
-  const [hoveredBar, setHoveredBar] = useState<string | null>(null);
+        {emotionBreakdown.length === 0 ? (
+          <div className="text-center font-mono py-8 bg-slate-950/20 border border-dashed border-geo-border/50 rounded-sm text-slate-500 text-[10px]">
+            No psychological states recorded yet. Log trades with emotional tags to map mindset efficiency analytics.
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5 pt-1">
+            {emotionBreakdown.map((row) => {
+              const emo = EMOTIONS_METADATA[row.emotion as any];
+              if (!emo) return null;
+              return (
+                <div 
+                  key={row.emotion} 
+                  className={`bg-slate-950/35 border ${emo.borderClass} p-3.5 flex flex-col justify-between hover:scale-101 transition-all duration-200 relative overflow-hidden`}
+                >
+                  <div className="flex justify-between items-start">
+                    <div>
+                      <h5 className="font-mono text-[11px] font-bold text-slate-105 text-slate-200 flex items-center gap-1.5">
+                        <span className="text-sm select-none">{emo.emoji}</span>
+                        <span>{emo.label}</span>
+                      </h5>
+                      <span className="font-mono text-[8.5px] text-slate-500 block mt-0.5">
+                        Win Rate: {row.winRate.toFixed(1)}% ({row.total} sample)
+                      </span>
+                    </div>
 
-  // Group by setup
-  const setupData = useMemo(() => {
-    const closed = trades.filter((t) => t.status !== 'open');
-    const setupsMap: Record<string, { pnl: number; count: number; name: string }> = {};
+                    <span className={`font-mono text-[11.5px] font-bold ${row.net >= 0 ? 'text-emerald-400' : 'text-rose-455 text-rose-450 text-rose-400'}`}>
+                      {row.net >= 0 ? '+' : ''}
+                      {formatUSD(row.net)}
+                    </span>
+                  </div>
 
-    closed.forEach((t) => {
-      const setupName = t.setup?.trim() || 'Undefined';
-      if (!setupsMap[setupName]) {
-        setupsMap[setupName] = { pnl: 0, count: 0, name: setupName };
-      }
-      setupsMap[setupName].pnl += (t.pnl ?? 0) - (t.fees ?? 0);
-      setupsMap[setupName].count += 1;
-    });
-
-    return Object.values(setupsMap).sort((a, b) => b.pnl - a.pnl);
-  }, [trades]);
-
-  const maxAbsolutePnL = useMemo(() => {
-    if (setupData.length === 0) return 100;
-    const maxVal = Math.max(...setupData.map((d) => Math.abs(d.pnl)), 10);
-    return maxVal * 1.1; // pad slightly
-  }, [setupData]);
-
-  if (setupData.length === 0) {
-    return (
-      <div className="bg-geo-panel border border-geo-border rounded-sm p-5 flex flex-col justify-between" id="setup-performance-empty">
-        <h3 className="text-xs font-bold text-slate-200 uppercase tracking-wider font-display">Strategy Diagnostics</h3>
-        <p className="text-[11px] text-slate-400 mb-4 font-mono">PnL breakdown categorized by strategy identifiers</p>
-        <div className="text-center text-slate-500 text-xs py-8 font-mono">
-          Add closed trades with associated strategies to generate metric diagnostics.
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="bg-geo-panel border border-geo-border rounded-sm p-5 flex flex-col justify-between" id="setup-bar-chart-card">
-      <div className="mb-4">
-        <h3 className="text-xs font-bold text-slate-200 uppercase tracking-wider font-display">Strategy &amp; Rule Effectiveness</h3>
-        <p className="text-[11px] text-slate-400 font-mono">Total net revenue contribution mapped across different trading setups</p>
+                  {/* Micro bar representing win rate color coded */}
+                  <div className="mt-3.5">
+                    <div className="h-1.5 w-full bg-slate-950 border border-slate-900 rounded-none overflow-hidden relative">
+                      <div
+                        className={`h-full ${row.net >= 0 ? 'bg-emerald-500/60' : 'bg-rose-500/60'}`}
+                        style={{ width: `${row.winRate}%` }}
+                      />
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
 
-      <div className="space-y-4 py-1" id="bar-chart-rows">
-        {setupData.map((d) => {
-          const isPositive = d.pnl >= 0;
-          const percentageOfMax = Math.min((Math.abs(d.pnl) / maxAbsolutePnL) * 50, 50);
-
-          return (
-            <div
-              key={d.name}
-              className={`group flex items-center justify-between p-2 rounded-sm transition-colors border ${
-                hoveredBar === d.name ? 'bg-geo-header border-geo-border' : 'border-transparent hover:bg-geo-header/40'
-              }`}
-              onMouseEnter={() => setHoveredBar(d.name)}
-              onMouseLeave={() => setHoveredBar(null)}
-            >
-              {/* Setup Title */}
-              <div className="w-[110px] sm:w-[160px] truncate pr-2">
-                <span className="text-xs font-bold text-slate-300 block font-mono" title={d.name}>
-                  {d.name}
-                </span>
-                <span className="text-[10px] text-slate-500 font-mono">
-                  {d.count} {d.count === 1 ? 'trade' : 'trades'}
-                </span>
-              </div>
-
-              {/* Centered Comparative Bar */}
-              <div className="flex-1 h-6 bg-geo-bg border border-geo-border rounded-none relative flex items-center px-0.5 overflow-hidden">
-                {/* Midline baseline indicator */}
-                <div className="absolute left-1/2 top-0 bottom-0 w-px bg-geo-border z-10" />
-
-                {/* Left Offset or Right Offset active bar fill */}
-                <div
-                  className="absolute h-[12px] rounded-none transition-all duration-300"
-                  style={{
-                    left: isPositive ? '50%' : `calc(50% - ${percentageOfMax}%)`,
-                    width: `${percentageOfMax}%`,
-                    backgroundColor: isPositive ? '#10b981' : '#ef4444',
-                    opacity: hoveredBar === d.name ? 1 : 0.85,
-                  }}
-                />
-              </div>
-
-              {/* Balance Yield value labels */}
-              <div className="w-[90px] text-right pl-3 font-mono">
-                <span className={`text-xs font-bold ${isPositive ? 'text-emerald-400' : 'text-rose-400'}`}>
-                  {isPositive ? '+' : ''}
-                  {formatUSD(d.pnl)}
-                </span>
-              </div>
-            </div>
-          );
-        })}
-      </div>
     </div>
   );
 }

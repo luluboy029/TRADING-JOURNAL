@@ -51,7 +51,8 @@ service cloud.firestore {
         && (!('screenshots' in data) || (data.screenshots is list && data.screenshots.size() <= 15))
         && (!('riskAmount' in data) || data.riskAmount is number)
         && (!('targetPrice' in data) || data.targetPrice is number)
-        && (!('stopLoss' in data) || data.stopLoss is number);
+        && (!('stopLoss' in data) || data.stopLoss is number)
+        && (!('emotion' in data) || (data.emotion is string && data.emotion.size() <= 64));
     }
 
     match /trades/{tradeId} {

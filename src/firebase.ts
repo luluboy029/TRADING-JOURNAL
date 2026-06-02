@@ -4,13 +4,30 @@
  */
 
 import { initializeApp } from 'firebase/app';
-import { getAuth } from 'firebase/auth';
-import { getFirestore, doc, getDocFromServer } from 'firebase/firestore';
+import { getAuth, connectAuthEmulator } from 'firebase/auth';
+import { getFirestore, doc, getDocFromServer, connectFirestoreEmulator } from 'firebase/firestore';
 import firebaseConfig from './firebase-applet-config.json';
+
+export { firebaseConfig };
 
 const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId || '(default)');
 export const auth = getAuth(app);
+
+// Optional: Automatically connect to local Firebase Emulators if running on localhost and desired
+if (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')) {
+  // Check if emulator query parameter, local flag, or custom process variable is active
+  const useEmulator = new URLSearchParams(window.location.search).has('emulator') || (window as any).USE_FIREBASE_EMULATOR;
+  if (useEmulator) {
+    console.log("🛠️ Local environment detected. Connecting to local Firebase Emulators...");
+    try {
+      connectFirestoreEmulator(db, 'localhost', 8080);
+      connectAuthEmulator(auth, 'http://localhost:9099');
+    } catch (e) {
+      console.warn("Emulators already connected or failed to connect:", e);
+    }
+  }
+}
 
 export enum OperationType {
   CREATE = 'create',

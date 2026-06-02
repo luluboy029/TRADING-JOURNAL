@@ -3,15 +3,31 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
-import { X, Calendar, Clock, DollarSign, Tag, Scale, TrendingUp, Sparkles, BookOpen } from 'lucide-react';
-import { Trade } from '../types';
+import React from 'react';
+import { motion } from 'motion/react';
+import { TradeEntry } from '../types';
+import { EMOTIONS_METADATA } from '../lib/emotions';
+import {
+  X,
+  Calendar,
+  Layers,
+  ArrowUpRight,
+  ArrowDownLeft,
+  DollarSign,
+  Briefcase,
+  ExternalLink,
+  Edit2,
+  Trash2,
+  Eye,
+  Percent,
+  FileText
+} from 'lucide-react';
 
 interface TradeDetailModalProps {
-  trade: Trade;
+  entry: TradeEntry | null;
   onClose: () => void;
-  onEdit: (trade: Trade) => void;
-  onDelete: (id: string) => void;
+  onEdit: (entry: TradeEntry) => void;
+  onDelete: (entry: TradeEntry) => void;
 }
 
 const formatUSD = (val: number) => {
@@ -21,344 +37,329 @@ const formatUSD = (val: number) => {
   }).format(val);
 };
 
-export default function TradeDetailModal({ trade, onClose, onEdit, onDelete }: TradeDetailModalProps) {
-  const [activeImgIndex, setActiveImgIndex] = useState(0);
-  const netPnL = (trade.pnl ?? 0) - (trade.fees ?? 0);
+export default function TradeDetailModal({ entry, onClose, onEdit, onDelete }: TradeDetailModalProps) {
+  if (!entry) return null;
 
-  // Compute holding duration in human readable hours/days
-  const holdingDuration = (() => {
-    if (!trade.entryDate || !trade.exitDate) return null;
-    const entry = new Date(trade.entryDate).getTime();
-    const exit = new Date(trade.exitDate).getTime();
-    const diffMs = exit - entry;
-    if (diffMs <= 0) return 'Instantaneous';
-
-    const diffMins = Math.floor(diffMs / 60000);
-    const diffHrs = Math.floor(diffMins / 60);
-    const diffDays = Math.floor(diffHrs / 24);
-
-    if (diffDays > 0) {
-      const remainingHrs = diffHrs % 24;
-      return `${diffDays} Day${diffDays !== 1 ? 's' : ''}${remainingHrs > 0 ? `, ${remainingHrs} hr${remainingHrs !== 1 ? 's' : ''}` : ''}`;
-    }
-    if (diffHrs > 0) {
-      const remainingMins = diffMins % 60;
-      return `${diffHrs} hour${diffHrs !== 1 ? 's' : ''}${remainingMins > 0 ? `, ${remainingMins} min${remainingMins !== 1 ? 's' : ''}` : ''}`;
-    }
-    return `${diffMins} min${diffMins !== 1 ? 's' : ''}`;
-  })();
-
-  // Multiplier for Risk-Reward
-  const rrRatio = (() => {
-    if (!trade.entryPrice || !trade.targetPrice || !trade.stopLoss) return null;
-    const isLong = trade.side === 'long';
-    const risk = isLong ? trade.entryPrice - trade.stopLoss : trade.stopLoss - trade.entryPrice;
-    const reward = isLong ? trade.targetPrice - trade.entryPrice : trade.entryPrice - trade.targetPrice;
-    if (risk <= 0 || reward <= 0) return null;
-    return (reward / risk).toFixed(2);
-  })();
-
-  // Render risk bar
-  const riskBarPercentage = (() => {
-    if (!trade.entryPrice || !trade.targetPrice || !trade.stopLoss) return null;
-    const entry = trade.entryPrice;
-    const sl = trade.stopLoss;
-    const tp = trade.targetPrice;
-
-    const totalSpan = Math.abs(tp - sl);
-    if (totalSpan <= 0) return null;
-
-    const isLong = trade.side === 'long';
-    let entryPercent = 0;
-
-    if (isLong) {
-      entryPercent = ((entry - sl) / totalSpan) * 100;
-    } else {
-      entryPercent = ((sl - entry) / totalSpan) * 100;
-    }
-
-    return Math.min(Math.max(entryPercent, 5), 95);
-  })();
+  const netPnl = (entry.pnl || 0) - (entry.fees || 0);
+  const isGain = entry.status === 'win';
+  const isLoss = entry.status === 'loss';
+  const isBE = entry.status === 'breakeven';
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-geo-bg/85 backdrop-blur-md overflow-y-auto" id="trade-detail-modal">
-      <div className="bg-geo-panel border border-geo-border rounded-sm shadow-none max-w-4xl w-full overflow-hidden flex flex-col max-h-[90vh]">
-        
-        {/* Header toolbar */}
-        <div className="p-5 border-b border-geo-border flex items-center justify-between bg-geo-header">
-          <div className="flex items-center gap-3">
-            <span className={`inline-flex items-center px-2 py-0.5 rounded-sm text-[9px] font-bold uppercase font-mono tracking-wider border ${
-              trade.side === 'long'
-                ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/25'
-                : 'bg-rose-500/10 text-rose-455 text-rose-400 border-rose-500/25'
-            }`}>
-              {trade.side}
-            </span>
-            <h3 className="text-base font-bold text-slate-100 uppercase tracking-wider font-display flex items-center gap-2">
-              {trade.symbol}
-              <span className="text-xs text-slate-500 font-mono">({trade.assetClass})</span>
-            </h3>
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-xs select-none" id="trade-details-overlay">
+      <motion.div
+        initial={{ opacity: 0, scale: 0.95 }}
+        animate={{ opacity: 1, scale: 1 }}
+        exit={{ opacity: 0, scale: 0.95 }}
+        transition={{ type: 'spring', damping: 25, stiffness: 350 }}
+        className="w-full max-w-2xl bg-geo-bg border border-geo-border rounded-none shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"
+        id="trade-detail-container"
+      >
+        {/* Modal Header */}
+        <div className="p-5 border-b border-geo-border bg-geo-header flex items-center justify-between">
+          <div className="flex items-center gap-2.5 text-left">
+            <Briefcase className="text-blue-400" size={16} />
+            <div>
+              <span className="text-[9px] font-mono font-bold tracking-widest text-slate-500 uppercase block">Trade Position Vault</span>
+              <h3 className="text-xs font-bold font-mono tracking-wider text-slate-205 text-slate-200 mt-0.5 uppercase">
+                {entry.symbol} Position Specifications
+              </h3>
+            </div>
           </div>
           <button
             onClick={onClose}
-            className="p-1.5 hover:bg-geo-bg text-slate-500 hover:text-white rounded-sm border border-transparent hover:border-geo-border transition-colors"
+            className="p-1 px-1.5 border border-geo-border hover:border-slate-600 bg-geo-bg rounded-sm text-slate-400 hover:text-slate-200 cursor-pointer transition-colors"
+            id="close-trade-modal"
           >
             <X size={15} />
           </button>
         </div>
 
-        {/* Content Body */}
-        <div className="p-6 overflow-y-auto space-y-6 flex-1 text-slate-200">
+        {/* Scrollable Content */}
+        <div className="flex-1 overflow-y-auto p-6 space-y-5 text-left text-slate-300 text-xs">
           
-          {/* Top Banner metrics overview */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4" id="detail-banner-metrics">
-            {/* Realized yield */}
-            <div className="bg-geo-bg border border-geo-border rounded-sm p-4 flex flex-col justify-between">
-              <span className="text-[9px] text-slate-500 font-bold font-mono uppercase tracking-wider">Realized Net Yield</span>
-              {trade.status === 'open' ? (
-                <span className="text-base font-bold text-blue-400 font-mono tracking-tight mt-2.5 block uppercase">Active Open</span>
-              ) : (
-                <span className={`text-xl font-bold font-mono tracking-tight mt-1.5 block ${netPnL >= 0 ? 'text-emerald-400' : 'text-rose-450 text-rose-400'}`}>
-                  {netPnL >= 0 ? '+' : ''}
-                  {formatUSD(netPnL)}
-                </span>
-              )}
-            </div>
+          {/* Row A: Headline and Category Badges */}
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-[10px] font-mono font-bold text-blue-400 flex items-center gap-1">
+              <Calendar size={13} />
+              {new Date(entry.entryDate + 'T00:00:00').toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
+            </span>
 
-            {/* Hold times duration */}
-            <div className="bg-geo-bg border border-geo-border rounded-sm p-4 flex flex-col justify-between">
-              <span className="text-[9px] text-slate-500 font-bold font-mono uppercase tracking-wider">Total Duration Held</span>
-              <span className="text-xs font-bold text-slate-250 font-mono mt-2.5 flex items-center gap-2">
-                <Clock size={14} className="text-slate-500" />
-                {holdingDuration ? holdingDuration.toUpperCase() : 'POSITION OPEN'}
+            <span className={`px-2 py-0.5 border text-[9px] font-mono font-bold tracking-wider uppercase rounded-sm flex items-center gap-1 ${
+              entry.side === 'long' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' : 'bg-red-500/10 text-red-400 border-red-500/20'
+            }`}>
+              {entry.side === 'long' ? <ArrowUpRight size={10} /> : <ArrowDownLeft size={10} />}
+              {entry.side}
+            </span>
+
+            <span className="bg-slate-950/60 border border-slate-900 px-2.5 py-0.5 text-[9px] font-mono font-semibold uppercase text-slate-400 rounded-sm">
+              {entry.assetClass}
+            </span>
+
+            <span className={`px-2 py-0.5 border text-[9px] font-mono font-bold tracking-wider uppercase rounded-sm ${
+              isGain ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' : 
+              isLoss ? 'bg-red-500/10 text-red-500 border-red-500/20' : 
+              isBE ? 'bg-slate-500/15 text-slate-450 border-slate-500/30' : 
+              'bg-blue-500/10 text-blue-400 border-blue-500/20'
+            }`}>
+              {entry.status}
+            </span>
+
+            {entry.emotion && EMOTIONS_METADATA[entry.emotion] && (() => {
+              const emo = EMOTIONS_METADATA[entry.emotion];
+              return (
+                <span className={`px-2 py-0.5 border text-[9px] font-mono font-bold tracking-wider uppercase rounded-sm flex items-center gap-1 ${emo.bgClass} ${emo.textClass} ${emo.borderClass}`}>
+                  <span>{emo.emoji}</span>
+                  <span>{emo.label}</span>
+                </span>
+              );
+            })()}
+          </div>
+
+          {/* Row B: Symbol Header details */}
+          <div>
+            <h2 className="text-sm font-bold text-slate-100 tracking-tight flex items-center gap-2">
+              Position: <span className="text-blue-400">{entry.symbol}</span>
+              <span className="text-xs text-slate-550 font-normal font-mono">&bull; Setup Playbook: &ldquo;{entry.setup}&rdquo;</span>
+            </h2>
+          </div>
+
+          {/* Row C: Main Financial metrics metrics */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 border-y border-geo-border py-4 font-mono">
+            <div>
+              <span className="text-[9px] text-slate-500 uppercase block">Entry Price</span>
+              <span className="text-xs font-bold text-slate-205 text-slate-100 block mt-0.5">
+                {formatUSD(entry.entryPrice)}
               </span>
             </div>
-
-            {/* Win Loss status */}
-            <div className="bg-geo-bg border border-geo-border rounded-sm p-4 flex flex-col justify-between">
-              <span className="text-[9px] text-slate-500 font-bold font-mono uppercase tracking-wider">Plan Conclusion</span>
-              <div className="mt-2 text-xs font-mono">
-                {trade.status === 'win' && (
-                  <span className="inline-flex items-center gap-1.5 text-[10px] font-bold uppercase px-2 py-0.5 rounded-sm bg-emerald-500/10 text-emerald-450 text-emerald-400 border border-emerald-500/25">
-                    WIN ACCUMULATION
-                  </span>
-                )}
-                {trade.status === 'loss' && (
-                  <span className="inline-flex items-center gap-1.5 text-[10px] font-bold uppercase px-2 py-0.5 rounded-sm bg-rose-500/10 text-rose-450 text-rose-400 border border-rose-500/25">
-                    LOSS HIT LIMIT
-                  </span>
-                )}
-                {trade.status === 'breakeven' && (
-                  <span className="inline-flex items-center gap-1.5 text-[10px] font-bold uppercase px-2 py-0.5 rounded-sm bg-slate-800 text-slate-350 border border-geo-border">
-                    BREAKEVEN BALANCE
-                  </span>
-                )}
-                {trade.status === 'open' && (
-                  <span className="inline-flex items-center gap-1.5 text-[10px] font-bold uppercase px-2 py-0.5 rounded-sm bg-blue-500/10 text-blue-400 border border-blue-400/20 animate-pulse">
-                    ACTIVE MONITOR
-                  </span>
-                )}
-              </div>
+            <div>
+              <span className="text-[9px] text-slate-500 uppercase block">Exit Price</span>
+              <span className="text-xs font-bold text-slate-205 text-slate-100 block mt-0.5">
+                {entry.exitPrice ? formatUSD(entry.exitPrice) : 'Position Open'}
+              </span>
+            </div>
+            <div>
+              <span className="text-[9px] text-slate-500 uppercase block">Quantity</span>
+              <span className="text-xs font-bold text-slate-205 text-slate-100 block mt-0.5">
+                {entry.quantity}
+              </span>
+            </div>
+            <div>
+              <span className="text-[9px] text-slate-500 uppercase block">Brokerage Fees</span>
+              <span className="text-xs font-bold text-rose-455 text-rose-400 block mt-0.5">
+                {formatUSD(entry.fees)}
+              </span>
             </div>
           </div>
 
-          {/* Quantitative Price Grid */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 bg-geo-bg p-4 rounded-sm border border-geo-border text-xs font-mono" id="detail-parameters-grid">
-            <div>
-              <span className="text-[9px] text-slate-500 font-bold uppercase">Entry Value</span>
-              <span className="text-xs font-bold text-slate-350 mt-1 block">{formatUSD(trade.entryPrice)}</span>
-            </div>
-            <div>
-              <span className="text-[9px] text-slate-500 font-bold uppercase">Exit Value</span>
-              <span className="text-xs font-bold text-slate-350 mt-1 block">
-                {trade.exitPrice ? formatUSD(trade.exitPrice) : <span className="text-slate-650 italic">Position open</span>}
+          {/* Row D: Secondary Metrics & R:R details */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="bg-slate-950/30 p-3 border border-geo-border rounded-none relative">
+              <span className="text-[9px] text-slate-500 font-mono uppercase block">Stop Loss Level</span>
+              <span className="text-[11px] font-mono font-bold text-rose-400 block mt-1">
+                {entry.stopLoss ? formatUSD(entry.stopLoss) : 'Not defined'}
               </span>
             </div>
-            <div>
-              <span className="text-[9px] text-slate-500 font-bold uppercase">Quantity Size</span>
-              <span className="text-xs font-bold text-slate-350 mt-1 block">{trade.quantity} units</span>
+
+            <div className="bg-slate-950/30 p-3 border border-geo-border rounded-none relative">
+              <span className="text-[9px] text-slate-500 font-mono uppercase block">Target Goal Level</span>
+              <span className="text-[11px] font-mono font-bold text-emerald-400 block mt-1">
+                {entry.targetPrice ? formatUSD(entry.targetPrice) : 'Not defined'}
+              </span>
             </div>
-            <div>
-              <span className="text-[9px] text-slate-500 font-bold uppercase">Commissions</span>
-              <span className="text-xs font-bold text-slate-350 mt-1 block">{formatUSD(trade.fees)}</span>
+
+            <div className="bg-slate-950/30 p-3 border border-geo-border rounded-none relative">
+              <span className="text-[9px] text-slate-500 font-mono uppercase block">Conviction / Risk-Amount</span>
+              <span className="text-[11px] font-mono font-bold text-blue-400 block mt-1 animate-pulse">
+                {entry.riskAmount ? formatUSD(entry.riskAmount) : 'Not assigned'}
+              </span>
             </div>
           </div>
 
-          {/* Risk-Reward Bracket Section */}
-          {riskBarPercentage !== null && trade.stopLoss && trade.targetPrice && (
-            <div className="bg-geo-bg p-5 rounded-sm border border-geo-border space-y-4 font-mono" id="risk-reward-visual-bar">
-              <div className="flex justify-between items-center text-xs">
-                <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
-                  <Scale size={13} className="text-blue-400" /> Target Plan Matrix Bracket
-                </span>
-                {rrRatio && (
-                  <span className="text-[11px] text-blue-400">
-                    Ratio: <span className="font-bold text-white bg-blue-600/10 border border-blue-500/20 px-2 py-0.5 rounded-sm">{rrRatio}:1 R:R</span>
-                  </span>
-                )}
-              </div>
-
-              {/* Progress Bar representational bracket */}
-              <div className="relative pt-1 font-mono">
-                <div className="h-2.5 w-full bg-geo-panel border border-geo-border rounded-none overflow-hidden flex">
-                  {/* Left (Stop Loss segment) */}
-                  <div className="w-1/2 h-full bg-rose-500/10 border-r border-geo-border" />
-                  {/* Right (Take Profit segment) */}
-                  <div className="w-1/2 h-full bg-emerald-500/10" />
-                </div>
-
-                <div className="flex justify-between text-[10px] mt-2.5">
-                  <div className="text-left">
-                    <span className="block text-[8px] text-slate-500 uppercase font-bold">Stop Loss SL</span>
-                    <span className="font-bold text-rose-455 text-rose-450">{formatUSD(trade.stopLoss)}</span>
-                  </div>
-                  <div className="text-center">
-                    <span className="block text-[8px] text-slate-500 uppercase font-bold">Entry Point</span>
-                    <span className="font-bold text-slate-300">{formatUSD(trade.entryPrice)}</span>
-                  </div>
-                  <div className="text-right">
-                    <span className="block text-[8px] text-slate-500 uppercase font-bold">Take Profit TP</span>
-                    <span className="font-bold text-emerald-450 text-emerald-400">{formatUSD(trade.targetPrice)}</span>
-                  </div>
-                </div>
-
-                {trade.riskAmount && (
-                  <div className="pt-2 border-t border-geo-border flex items-center justify-between text-[10px] mt-2.5">
-                    <span className="text-slate-500">Capital At Risk Down On Stop:</span>
-                    <span className="font-bold text-rose-450 font-mono">{formatUSD(trade.riskAmount)}</span>
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* Setup Strategy identifier block */}
-          {trade.setup && (
-            <div className="flex items-center gap-2 bg-geo-bg px-4 py-2.5 rounded-sm border border-geo-border font-mono text-xs" id="detail-setup-strip pb-1">
-              <Tag size={13} className="text-blue-500" />
-              <span className="text-[10px] font-bold text-slate-500 uppercase">Strategic setup:</span>
-              <span className="text-[11px] text-blue-400 font-bold bg-geo-panel px-2.5 py-0.5 rounded-sm border border-geo-border ml-1">
-                {trade.setup}
+          {/* Row E: Net Realized Profit panel */}
+          <div className={`p-4 border rounded-none relative text-left flex justify-between items-center ${
+            netPnl >= 0 ? 'bg-emerald-500/5 border-emerald-500/15' : 'bg-rose-500/5 border-rose-500/15'
+          }`}>
+            <div className="font-mono">
+              <span className="text-[9px] text-slate-500 uppercase block">Net Position Return (P&amp;L After Fees)</span>
+              <span className={`text-[15px] font-bold block mt-0.5 ${netPnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                {netPnl >= 0 ? '+' : ''}
+                {formatUSD(netPnl)}
               </span>
             </div>
-          )}
+            
+            <div className="font-mono text-right">
+              <span className="text-[9px] text-slate-500 uppercase block">Gross Position Return</span>
+              <span className="text-[11px] text-slate-300 block mt-0.5">
+                {formatUSD(entry.pnl || 0)}
+              </span>
+            </div>
+          </div>
 
-          {/* Attached screenshot proof container */}
-          {(() => {
-            const listPics = trade.screenshots && trade.screenshots.length > 0
-              ? trade.screenshots
-              : (trade.screenshot ? [trade.screenshot] : []);
+          {/* Psychological Audit Feedback card */}
+          {entry.emotion && EMOTIONS_METADATA[entry.emotion] && (() => {
+            const emo = EMOTIONS_METADATA[entry.emotion];
+            let analysis = '';
+            let analysisColor = 'text-slate-350';
+            let analysisBg = 'bg-slate-950/20 border-geo-border/50';
 
-            if (listPics.length === 0) return null;
-
-            const resolvedIndex = Math.min(activeImgIndex, listPics.length - 1);
+            if (entry.status === 'win') {
+              if (['Disciplined', 'Patient'].includes(emo.label)) {
+                analysis = 'Pristine Execution: Following playbooks patiently led to a profitable result. This is high-impact trade execution!';
+                analysisBg = 'bg-emerald-500/5 border-emerald-500/15';
+                analysisColor = 'text-emerald-400';
+              } else if (['FOMO', 'Greed', 'Revenge', 'Overconfident'].includes(emo.label)) {
+                analysis = 'Lucky Break (Flawed Process): A profitable trade executed with poor emotional hygiene (FOMO, Greed, or Anger) reinforces bad habits. Review setup quality.';
+                analysisBg = 'bg-amber-500/5 border-amber-500/15';
+                analysisColor = 'text-amber-400';
+              } else {
+                analysis = 'Profitable outcome with active anxiety. Working on trust in your strategy will reduce stress.';
+                analysisBg = 'bg-blue-505/5 border-blue-500/15';
+                analysisColor = 'text-blue-400';
+              }
+            } else if (entry.status === 'loss') {
+              if (['Disciplined', 'Patient'].includes(emo.label)) {
+                analysis = 'Excellent Process (Good Drawdown): A disciplined trade resulting in a loss is just a normal cost of doing business. Continue taking high-probability setups.';
+                analysisBg = 'bg-blue-500/5 border-blue-500/15';
+                analysisColor = 'text-slate-300';
+              } else if (['FOMO', 'Greed', 'Revenge', 'Overconfident'].includes(emo.label)) {
+                analysis = 'Self-Sabotage Warning: This loss was heavily amplified or caused by emotional trading. Pause execution, restore psychological balance, and review your playbook.';
+                analysisBg = 'bg-rose-500/5 border-rose-500/15';
+                analysisColor = 'text-rose-455 text-rose-400';
+              } else {
+                analysis = 'Stressed Loss: Anxiety or fear influenced exit timing. Focus on pre-defining exits and leaving trades alone to hit stops or targets.';
+                analysisBg = 'bg-slate-950/40 border-geo-border/50';
+                analysisColor = 'text-slate-400';
+              }
+            } else if (entry.status === 'open') {
+              analysis = `Active Hold: Retaining a ${emo.label.toLowerCase()} mindset. Monitor price action objectively according to plan.`;
+              analysisBg = 'bg-slate-950/15 border-geo-border/50';
+              analysisColor = 'text-slate-300';
+            } else {
+              analysis = 'Trade resolved at breakeven. Controlled risk exposure.';
+              analysisBg = 'bg-slate-950/20 border-geo-border/50';
+            }
 
             return (
-              <div className="space-y-2.5" id="detail-screenshot-viewer">
-                <div className="flex items-center justify-between">
-                  <label className="text-[9px] font-bold text-slate-500 uppercase tracking-widest block font-mono">
-                    Chart Screenshot Proofs ({listPics.length})
-                  </label>
-                  {listPics.length > 1 && (
-                    <span className="text-[9px] font-mono text-blue-400 bg-blue-500/10 border border-blue-500/25 px-2 py-0.5 rounded-sm">
-                      Image {resolvedIndex + 1} of {listPics.length}
-                    </span>
-                  )}
+              <div className={`p-4 border font-mono rounded-none ${analysisBg}`} id="psychological-audit-box">
+                <div className="flex items-center gap-2 mb-1.5">
+                  <span className="text-base select-none">{emo.emoji}</span>
+                  <span className="text-[9.5px] font-bold uppercase tracking-wider text-slate-200">Psychology Audit feedback</span>
+                  <span className={`text-[8.5px] font-mono font-bold px-1.5 py-0.5 border rounded-sm ml-auto ${emo.bgClass} ${emo.textClass} ${emo.borderClass}`}>
+                    {emo.label} State
+                  </span>
                 </div>
-
-                <div className="border border-geo-border bg-geo-bg rounded-sm overflow-hidden p-2 flex flex-col items-center">
-                  <img
-                    src={listPics[resolvedIndex]}
-                    alt={`Executed chart proof magnification ${resolvedIndex + 1}`}
-                    className="w-full max-h-[320px] object-contain transition-all duration-200"
-                    referrerPolicy="no-referrer"
-                  />
-                </div>
-
-                {/* Grid of clickable thumbnail selectors if there are multiple pictures */}
-                {listPics.length > 1 && (
-                  <div className="flex flex-wrap gap-1.5 pt-1" id="detail-screenshots-selector-grid">
-                    {listPics.map((picUrl, idx) => (
-                      <button
-                        key={idx}
-                        type="button"
-                        onClick={() => setActiveImgIndex(idx)}
-                        className={`relative w-12 h-10 rounded-sm overflow-hidden border transition-all ${
-                          idx === resolvedIndex
-                            ? 'border-blue-500 ring-1 ring-blue-500/50 opacity-100 scale-105'
-                            : 'border-geo-border opacity-60 hover:opacity-100 hover:scale-102'
-                        }`}
-                      >
-                        <img
-                          src={picUrl}
-                          className="w-full h-full object-cover"
-                          alt={`Thumbnail ${idx + 1}`}
-                          referrerPolicy="no-referrer"
-                        />
-                        <div className="absolute inset-0 flex items-center justify-center bg-black/35">
-                          <span className="text-[8px] font-mono font-bold text-white">#{idx + 1}</span>
-                        </div>
-                      </button>
-                    ))}
-                  </div>
-                )}
+                <p className={`text-[10.5px] leading-relaxed font-light ${analysisColor}`}>
+                  {analysis}
+                </p>
               </div>
             );
           })()}
 
-          {/* Multi-line Notes observations */}
-          {trade.notes && (
-            <div className="bg-geo-bg p-5 rounded-sm border border-geo-border space-y-2 font-mono" id="detail-notes-card">
-              <span className="text-[9px] font-bold text-slate-500 uppercase tracking-widest flex items-center gap-1.5">
-                <BookOpen size={13} className="text-blue-400" /> Takeaways &amp; Execution Notes
+          {/* Row F: Technical Reflections and Playbook Analysis details */}
+          <div className="space-y-1.5 text-left">
+            <span className="text-[9px] font-mono tracking-widest text-slate-450 text-slate-400 uppercase font-bold flex items-center gap-1">
+              <FileText size={11} /> Strategy conviction notes
+            </span>
+            <div className="p-4 bg-geo-panel border border-geo-border font-mono text-[11px] leading-relaxed text-slate-200 select-all whitespace-pre-wrap break-words min-h-[100px] font-light shadow-inner">
+              {entry.notes || 'No reflections logged for this position.'}
+            </div>
+          </div>
+
+          {/* Row G: Uploaded Position Screenshots */}
+          {(entry.screenshot || (entry.screenshots && entry.screenshots.length > 0)) && (
+            <div className="space-y-2 text-left">
+              <span className="text-[9px] font-mono tracking-widest text-slate-400 uppercase font-bold flex items-center gap-1">
+                <Eye size={11} className="text-blue-400" /> Position Screenshots Proofs ({entry.screenshots ? entry.screenshots.length : 1})
               </span>
-              <p className="text-[11px] text-slate-350 leading-relaxed whitespace-pre-wrap pl-1 italic">
-                &ldquo;{trade.notes}&rdquo;
-              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                {entry.screenshot && (
+                  <div className="border border-geo-border overflow-hidden bg-slate-950/80 p-1 rounded-sm flex flex-col justify-between">
+                    <img
+                      src={entry.screenshot}
+                      alt="Primary position blueprint screenshot"
+                      className="w-full h-auto max-h-[180px] object-cover hover:scale-[1.02] transition-transform duration-200"
+                      referrerPolicy="no-referrer"
+                      onError={(e) => {
+                        (e.target as HTMLElement).style.display = 'none';
+                      }}
+                    />
+                    <a
+                      href={entry.screenshot}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-[8px] font-mono text-blue-400 hover:underline flex items-center gap-1.5 justify-center mt-2"
+                    >
+                      <span>Open image in new Tab</span>
+                      <ExternalLink size={10} />
+                    </a>
+                  </div>
+                )}
+                {entry.screenshots && entry.screenshots.map((s, idx) => {
+                  if (s === entry.screenshot) return null; // Avoid duplicating primary screenshot
+                  return (
+                    <div key={idx} className="border border-geo-border overflow-hidden bg-slate-950/80 p-1 rounded-sm flex flex-col justify-between">
+                      <img
+                        src={s}
+                        alt={`Supporting screenshot #${idx + 1}`}
+                        className="w-full h-auto max-h-[180px] object-cover hover:scale-[1.02] transition-transform duration-200"
+                        referrerPolicy="no-referrer"
+                        onError={(e) => {
+                          (e.target as HTMLElement).style.display = 'none';
+                        }}
+                      />
+                      <a
+                        href={s}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-[8px] font-mono text-blue-400 hover:underline flex items-center gap-1.5 justify-center mt-2"
+                      >
+                        <span>Open image #{idx + 1} in new Tab</span>
+                        <ExternalLink size={10} />
+                      </a>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           )}
 
-          {/* Logger Timestamps */}
-          <div className="grid grid-cols-2 gap-4 border-t border-geo-border pt-4 text-[10px] font-mono text-slate-550" id="detail-dates-footer">
-            <div className="flex items-center gap-1.5">
-              <Calendar size={11} />
-              <span>ENTRY: {new Date(trade.entryDate).toLocaleString()}</span>
-            </div>
-            {trade.exitDate && (
-              <div className="flex items-center gap-1.5 justify-end">
-                <Calendar size={11} />
-                <span>EXIT: {new Date(trade.exitDate).toLocaleString()}</span>
-              </div>
-            )}
-          </div>
-
         </div>
 
-        {/* Modal edit and close footer */}
-        <div className="p-4 border-t border-geo-border bg-geo-header flex items-center justify-between" id="detail-footer-toolbar">
-          <div className="flex items-center gap-2">
+        {/* Modal Action trigger controls */}
+        <div className="p-4 border-t border-geo-border bg-slate-950/50 flex flex-col sm:flex-row justify-between gap-3 font-mono">
+          <div className="flex gap-2">
             <button
-              onClick={() => onEdit(trade)}
-              className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-[11px] font-bold font-mono rounded-sm transition-colors uppercase tracking-wider"
+              onClick={() => {
+                onEdit(entry);
+                onClose();
+              }}
+              className="h-9 bg-slate-900 border border-slate-700 hover:border-slate-550 text-slate-300 hover:text-white px-4 flex items-center justify-center gap-1.5 text-[10px] uppercase font-bold cursor-pointer rounded-sm transition-all"
             >
-              Edit Parameters
+              <Edit2 size={11} className="text-slate-400" />
+              Edit chronicle
             </button>
             <button
-              onClick={() => onDelete(trade.id)}
-              className="px-4 py-2 bg-rose-950/20 hover:bg-rose-900/30 text-rose-450 border border-rose-500/20 hover:border-rose-500/30 text-[11px] font-bold font-mono rounded-sm transition-colors uppercase"
+              onClick={() => {
+                onDelete(entry);
+                onClose();
+              }}
+              className="h-9 bg-transparent border border-rose-500/20 hover:border-rose-500/40 text-rose-455 text-rose-450 text-rose-400 px-4 flex items-center justify-center gap-1.5 text-[10px] uppercase font-bold cursor-pointer rounded-sm transition-all hover:bg-rose-500/5"
             >
-              Delete Position
+              <Trash2 size={11} />
+              Delete log
             </button>
           </div>
+
           <button
             onClick={onClose}
-            className="px-4 py-2 bg-geo-bg hover:bg-geo-header border border-geo-border text-slate-400 hover:text-slate-200 text-[11px] font-bold font-mono rounded-sm transition-colors uppercase"
+            className="h-9 bg-blue-600 hover:bg-blue-700 text-white font-bold px-6 text-[10.5px] uppercase rounded-sm cursor-pointer transition-colors self-end sm:self-auto"
           >
-            Close Viewer
+            Close Position
           </button>
         </div>
 
-      </div>
+      </motion.div>
     </div>
   );
 }
