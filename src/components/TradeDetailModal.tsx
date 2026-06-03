@@ -147,7 +147,7 @@ export default function TradeDetailModal({ entry, onClose, onEdit, onDelete }: T
               </span>
             </div>
             <div>
-              <span className="text-[9px] text-slate-500 uppercase block font-bold text-slate-400">Qty</span>
+              <span className="text-[9px] text-slate-500 uppercase block font-bold text-slate-400">Amount</span>
               <span className="text-xs font-bold text-slate-205 text-slate-100 block mt-0.5">
                 {entry.quantity}
               </span>

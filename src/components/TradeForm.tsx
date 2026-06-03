@@ -183,7 +183,7 @@ export default function TradeForm({ isOpen, onClose, onSave, initialEntry }: Tra
       return;
     }
     if (quantity <= 0) {
-      setFormError('Quantity size must exceed zero.');
+      setFormError('Amount size must exceed zero.');
       return;
     }
     if (fees < 0) {
@@ -191,17 +191,16 @@ export default function TradeForm({ isOpen, onClose, onSave, initialEntry }: Tra
       return;
     }
 
-    // Dynamic P&L Calculation
+    // Dynamic P&L Calculation based on Amount
     let calculatedPnl = 0;
     if (status !== 'open') {
-      const ep = entryPrice;
-      const xp = closedPrice || exitPrice || entryPrice;
-      const qty = quantity;
-      
-      if (side === 'long') {
-        calculatedPnl = (xp - ep) * qty;
-      } else {
-        calculatedPnl = (ep - xp) * qty;
+      const amt = Math.abs(quantity);
+      if (status === 'win') {
+        calculatedPnl = amt;
+      } else if (status === 'loss') {
+        calculatedPnl = -amt;
+      } else if (status === 'breakeven') {
+        calculatedPnl = 0;
       }
     }
 
@@ -441,8 +440,8 @@ export default function TradeForm({ isOpen, onClose, onSave, initialEntry }: Tra
             </motion.div>
           )}
 
-          {/* Row E: Core Math metrics */}
-          <div className="grid grid-cols-3 gap-3 border-y border-geo-border/60 py-3.5">
+          {/* Row E: Price & Targets */}
+          <div className="grid grid-cols-3 gap-3 border-t border-geo-border/60 pt-3.5">
             <div>
               <label className="block text-[9px] font-mono font-bold tracking-wider text-slate-500 uppercase mb-1">
                 Entry Price *
@@ -451,7 +450,7 @@ export default function TradeForm({ isOpen, onClose, onSave, initialEntry }: Tra
                 type="number"
                 step="any"
                 required
-                placeholder="Rate value"
+                placeholder="Entry level"
                 value={entryPrice || ''}
                 onChange={(e) => setEntryPrice(Number(e.target.value) || 0)}
                 className="w-full h-8 bg-geo-bg border border-geo-border hover:border-slate-800 focus:border-blue-500 px-2 text-[10.5px] font-mono text-slate-200 outline-none transition-colors"
@@ -460,13 +459,44 @@ export default function TradeForm({ isOpen, onClose, onSave, initialEntry }: Tra
 
             <div>
               <label className="block text-[9px] font-mono font-bold tracking-wider text-slate-500 uppercase mb-1">
-                Qty *
+                Stop Loss Price
+              </label>
+              <input
+                type="number"
+                step="any"
+                placeholder="SL Price"
+                value={stopLoss || ''}
+                onChange={(e) => setStopLoss(Number(e.target.value) || undefined)}
+                className="w-full h-8 bg-geo-bg border border-geo-border hover:border-slate-800 focus:border-blue-500 px-2 text-[10.5px] font-mono text-slate-200 outline-none transition-colors"
+              />
+            </div>
+
+            <div>
+              <label className="block text-[9px] font-mono font-bold tracking-wider text-slate-500 uppercase mb-1">
+                Take Target Price
+              </label>
+              <input
+                type="number"
+                step="any"
+                placeholder="Target Price"
+                value={targetPrice || ''}
+                onChange={(e) => setTargetPrice(Number(e.target.value) || undefined)}
+                className="w-full h-8 bg-geo-bg border border-geo-border hover:border-slate-800 focus:border-blue-500 px-2 text-[10.5px] font-mono text-slate-202 text-slate-200 outline-none transition-colors"
+              />
+            </div>
+          </div>
+
+          {/* Row F: Position Sizing & Costs */}
+          <div className="grid grid-cols-3 gap-3 border-b border-geo-border/60 pb-3.5">
+            <div>
+              <label className="block text-[9px] font-mono font-bold tracking-wider text-slate-500 uppercase mb-1">
+                Amount *
               </label>
               <input
                 type="number"
                 step="any"
                 required
-                placeholder="Unit volume"
+                placeholder="Amount"
                 value={quantity || ''}
                 onChange={(e) => setQuantity(Number(e.target.value) || 0)}
                 className="w-full h-8 bg-geo-bg border border-geo-border hover:border-slate-800 focus:border-blue-500 px-2 text-[10.5px] font-mono text-slate-200 outline-none transition-colors"
@@ -486,49 +516,18 @@ export default function TradeForm({ isOpen, onClose, onSave, initialEntry }: Tra
                 className="w-full h-8 bg-geo-bg border border-geo-border hover:border-slate-800 focus:border-blue-500 px-2 text-[10.5px] font-mono text-slate-200 outline-none transition-colors"
               />
             </div>
-          </div>
-
-          {/* Row F: Planifications (SL, Target, Risk Amount) */}
-          <div className="grid grid-cols-3 gap-3">
-            <div>
-              <label className="block text-[9px] font-mono font-bold tracking-wider text-slate-500 uppercase mb-0.5">
-                Stop Loss ($)
-              </label>
-              <input
-                type="number"
-                step="any"
-                placeholder="Limit"
-                value={stopLoss || ''}
-                onChange={(e) => setStopLoss(Number(e.target.value) || undefined)}
-                className="w-full h-8 bg-slate-950/20 border border-geo-border hover:border-slate-800 px-2 text-[10.5px] font-mono text-slate-200 outline-none transition-colors"
-              />
-            </div>
 
             <div>
-              <label className="block text-[9px] font-mono font-bold tracking-wider text-slate-500 uppercase mb-0.5">
-                Take Target ($)
-              </label>
-              <input
-                type="number"
-                step="any"
-                placeholder="Goal"
-                value={targetPrice || ''}
-                onChange={(e) => setTargetPrice(Number(e.target.value) || undefined)}
-                className="w-full h-8 bg-slate-950/20 border border-geo-border hover:border-slate-800 px-2 text-[10.5px] font-mono text-slate-202 text-slate-200 outline-none transition-colors"
-              />
-            </div>
-
-            <div>
-              <label className="block text-[9px] font-mono font-bold tracking-wider text-slate-500 uppercase mb-0.5">
+              <label className="block text-[9px] font-mono font-bold tracking-wider text-slate-500 uppercase mb-1">
                 Conviction Risk ($)
               </label>
               <input
                 type="number"
                 step="any"
-                placeholder="R size"
+                placeholder="Risk amount"
                 value={riskAmount || ''}
                 onChange={(e) => setRiskAmount(Number(e.target.value) || undefined)}
-                className="w-full h-8 bg-slate-950/20 border border-geo-border hover:border-slate-800 px-2 text-[10.5px] font-mono text-slate-200 outline-none transition-colors"
+                className="w-full h-8 bg-geo-bg border border-geo-border hover:border-slate-800 focus:border-blue-500 px-2 text-[10.5px] font-mono text-slate-200 outline-none transition-colors"
               />
             </div>
           </div>

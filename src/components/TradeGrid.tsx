@@ -331,7 +331,7 @@ export default function TradeGrid({ entries, onSelect, onEdit, onDelete }: Trade
                       {isOpen ? 'Active Open' : `${netVal >= 0 ? '+' : ''}${formatUSD(netVal)}`}
                     </span>
                     <span className="text-[8px] text-slate-550 text-slate-500 block">
-                      Qty size: {e.quantity} &bull; Entry: {formatUSD(e.entryPrice)}
+                      Amount: {e.quantity} &bull; Entry: {formatUSD(e.entryPrice)}
                     </span>
                   </div>
 
