@@ -5,14 +5,13 @@
 
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { TradeEntry, CapitalEntry } from './types';
+import { TradeEntry } from './types';
 import StatsDashboard from './components/StatsDashboard';
 import AnalyticsCharts from './components/AnalyticsCharts';
 import TradeForm from './components/TradeForm';
 import TradeGrid from './components/TradeGrid';
 import TradeDetailModal from './components/TradeDetailModal';
 import AuthScreen from './components/AuthScreen';
-import CapitalManager from './components/CapitalManager';
 import {
   TrendingUp,
   TrendingDown,
@@ -138,150 +137,6 @@ export default function App() {
   });
 
   const [entries, setEntries] = useState<TradeEntry[]>([]);
-  const [capitalEntries, setCapitalEntries] = useState<CapitalEntry[]>([]);
-  const [isCapitalOpen, setIsCapitalOpen] = useState(false);
-
-  // Fetch and cache Capital entries from full-stack API
-  const fetchCapital = async (currentToken: string | null, currentUser?: typeof user) => {
-    const activeUser = currentUser || user;
-    if (!currentToken || !activeUser) return;
-    try {
-      const res = await fetch('/api/capital', {
-        headers: {
-          'Authorization': `Bearer ${currentToken}`
-        }
-      });
-      if (!res.ok) {
-        if (res.status === 401) {
-          handleLogout();
-          return;
-        }
-        throw new Error('API server returned response error');
-      }
-      const data = await res.json();
-
-      // Ephemeral Database Protection for Capital
-      const localCapitalKey = `trades_desk_capital_v2_${activeUser.id}`;
-      const rawLocal = localStorage.getItem(localCapitalKey);
-      
-      let localCap = [];
-      if (rawLocal) {
-        try {
-          localCap = JSON.parse(rawLocal);
-        } catch (parseError) {
-          console.warn('Error reading parsing local capital for sync check', parseError);
-        }
-      }
-
-      if (Array.isArray(localCap) && localCap.length > 0) {
-        const serverIds = new Set(data.map((item: any) => item.id));
-        const missingOnServer = localCap.filter((item: any) => item.id && !serverIds.has(item.id));
-
-        if (missingOnServer.length > 0) {
-          console.log('Restoring capital entries back to server container on the fly', missingOnServer);
-          try {
-            const syncRes = await fetch('/api/capital/sync', {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${currentToken}`
-              },
-              body: JSON.stringify({ capital: [...data, ...missingOnServer] })
-            });
-
-            if (syncRes.ok) {
-              const combinedCap = [...data, ...missingOnServer];
-              setCapitalEntries(combinedCap);
-              localStorage.setItem(localCapitalKey, JSON.stringify(combinedCap));
-              return;
-            }
-          } catch (syncErr) {
-            console.warn('Silent background capital restoration failed', syncErr);
-          }
-        }
-      }
-
-      setCapitalEntries(data);
-      localStorage.setItem(localCapitalKey, JSON.stringify(data));
-    } catch (e: any) {
-      console.warn('Backend connection unavailable for capital, falling back to local cache', e);
-      const stored = localStorage.getItem(`trades_desk_capital_v2_${activeUser.id}`);
-      if (stored) {
-        try {
-          setCapitalEntries(JSON.parse(stored));
-        } catch {
-          setCapitalEntries([]);
-        }
-      } else {
-        setCapitalEntries([]);
-      }
-    }
-  };
-
-  const handleSaveCapital = async (capitalData: Omit<CapitalEntry, 'id'> & { id?: string }) => {
-    if (!user?.id) return;
-    const isEditing = !!capitalData.id;
-    const targetId = capitalData.id;
-
-    try {
-      const endpoint = isEditing ? `/api/capital/${targetId}` : '/api/capital';
-      const method = isEditing ? 'PUT' : 'POST';
-      const res = await fetch(endpoint, {
-        method,
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify(capitalData)
-      });
-      if (!res.ok) throw new Error('Failed saving capital to server');
-      const savedDoc = await res.json();
-
-      let updatedList: CapitalEntry[];
-      if (isEditing) {
-        updatedList = capitalEntries.map((e) => e.id === targetId ? savedDoc : e);
-      } else {
-        updatedList = [savedDoc, ...capitalEntries];
-      }
-      setCapitalEntries(updatedList);
-      localStorage.setItem(`trades_desk_capital_v2_${user.id}`, JSON.stringify(updatedList));
-    } catch (e) {
-      console.error('Save capital API sync failed, falling back to localized container state', e);
-      const nextId = targetId || `cap-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
-      const savedCapital: CapitalEntry = {
-        ...capitalData,
-        id: nextId
-      } as CapitalEntry;
-
-      const updatedList = isEditing 
-        ? capitalEntries.map((e) => e.id === targetId ? savedCapital : e)
-        : [savedCapital, ...capitalEntries];
-
-      setCapitalEntries(updatedList);
-      localStorage.setItem(`trades_desk_capital_v2_${user.id}`, JSON.stringify(updatedList));
-    }
-  };
-
-  const handleDeleteCapital = async (id: string) => {
-    if (!user?.id) return;
-
-    try {
-      const res = await fetch(`/api/capital/${id}`, {
-        method: 'DELETE',
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
-      if (!res.ok) throw new Error('Failed deleting capital from server');
-    } catch (e) {
-      console.error('Delete capital API sync failed, falling back to local delete update', e);
-    }
-
-    const updated = capitalEntries.filter((e) => e.id !== id);
-    setCapitalEntries(updated);
-    localStorage.setItem(`trades_desk_capital_v2_${user.id}`, JSON.stringify(updated));
-  };
-
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingEntry, setEditingEntry] = useState<TradeEntry | null>(null);
   const [selectedEntry, setSelectedEntry] = useState<TradeEntry | null>(null);
@@ -324,7 +179,6 @@ export default function App() {
     setToken(null);
     setUser(null);
     setEntries([]);
-    setCapitalEntries([]);
   };
 
   // Load initially from full-stack Express API
@@ -442,7 +296,6 @@ export default function App() {
             setToken(savedToken);
             setUser(data.user);
             fetchEntries(savedToken, data.user);
-            fetchCapital(savedToken, data.user);
           } else {
             handleLogout();
             setIsLoading(false);
@@ -462,7 +315,6 @@ export default function App() {
   useEffect(() => {
     if (token && user) {
       fetchEntries(token, user);
-      fetchCapital(token, user);
     }
   }, [token, user]);
 
@@ -592,10 +444,8 @@ export default function App() {
       console.error('Reset database API error', e);
     }
     setEntries([]);
-    setCapitalEntries([]);
     if (user?.id) {
       localStorage.setItem(`${LOCAL_STORAGE_KEY}_${user.id}`, JSON.stringify([]));
-      localStorage.setItem(`trades_desk_capital_v2_${user.id}`, JSON.stringify([]));
       // Mark existing entries as deleted locally to prevent background restauration
       try {
         const delKey = `trades_desk_deleted_v2_${user.id}`;
@@ -706,11 +556,7 @@ export default function App() {
             )}
           </div>
 
-          <StatsDashboard
-            entries={entries}
-            capitalEntries={capitalEntries}
-            onManageCapital={() => setIsCapitalOpen(true)}
-          />
+          <StatsDashboard entries={entries} />
 
           {/* Graphical Analytics Layout */}
           <AnalyticsCharts entries={entries} />
@@ -754,19 +600,6 @@ export default function App() {
             }}
             onSave={handleSaveEntry}
             initialEntry={editingEntry}
-          />
-        )}
-      </AnimatePresence>
-
-      {/* Capital Ledger Flow Management Overlay */}
-      <AnimatePresence>
-        {isCapitalOpen && (
-          <CapitalManager
-            isOpen={isCapitalOpen}
-            onClose={() => setIsCapitalOpen(false)}
-            capitalEntries={capitalEntries}
-            onSaveCapital={handleSaveCapital}
-            onDeleteCapital={handleDeleteCapital}
           />
         )}
       </AnimatePresence>

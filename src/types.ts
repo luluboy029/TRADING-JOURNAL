@@ -48,12 +48,3 @@ export interface TradeStats {
   averageLoss: number;
   profitFactor: number;
 }
-
-export interface CapitalEntry {
-  id: string;
-  amount: number;
-  type: 'starting' | 'deposit' | 'withdrawal';
-  date: string; // YYYY-MM-DD
-  notes: string;
-}
-
