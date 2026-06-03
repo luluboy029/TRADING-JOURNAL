@@ -125,52 +125,102 @@ export default function App() {
     return () => clearInterval(ticker);
   }, []);
 
-  // Load initially from local storage
-  useEffect(() => {
-    const stored = localStorage.getItem(LOCAL_STORAGE_KEY);
-    if (stored) {
-      try {
-        const parsed = JSON.parse(stored);
-        setEntries(parsed);
-      } catch (e) {
-        console.error('Failed reading entries from local cache, falling back to seed.', e);
+  const [isLoading, setIsLoading] = useState(true);
+  const [apiError, setApiError] = useState<string | null>(null);
+
+  // Load initially from full-stack Express API
+  const fetchEntries = async () => {
+    setIsLoading(true);
+    setApiError(null);
+    try {
+      const res = await fetch('/api/logs');
+      if (!res.ok) throw new Error('API server returned response error');
+      const data = await res.json();
+      setEntries(data);
+      localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(data));
+    } catch (e: any) {
+      console.warn('Backend connection unavailable, falling back to local storage cache', e);
+      setApiError('Connected in Offline Mode');
+      const stored = localStorage.getItem(LOCAL_STORAGE_KEY);
+      if (stored) {
+        try {
+          setEntries(JSON.parse(stored));
+        } catch {
+          setEntries(SEED_ENTRIES);
+        }
+      } else {
         setEntries(SEED_ENTRIES);
       }
-    } else {
-      setEntries(SEED_ENTRIES);
-      localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(SEED_ENTRIES));
+    } finally {
+      setIsLoading(false);
     }
-  }, []);
-
-  const saveToDB = (updatedEntries: TradeEntry[]) => {
-    setEntries(updatedEntries);
-    localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(updatedEntries));
   };
+
+  useEffect(() => {
+    fetchEntries();
+  }, []);
 
   const handleSaveEntry = async (entryData: Omit<TradeEntry, 'id'> & { id?: string }) => {
     const isEditing = !!entryData.id;
-    const targetId = entryData.id || `trade-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+    const targetId = entryData.id;
 
-    const savedEntry: TradeEntry = {
-      ...entryData,
-      id: targetId
-    } as TradeEntry;
+    try {
+      if (isEditing) {
+        const res = await fetch(`/api/logs/${targetId}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(entryData)
+        });
+        if (!res.ok) throw new Error('Failed updating log on server');
+        const updatedDoc = await res.json();
+        const updatedList = entries.map((e) => (e.id === targetId ? updatedDoc : e));
+        setEntries(updatedList);
+        localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(updatedList));
+      } else {
+        const res = await fetch('/api/logs', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(entryData)
+        });
+        if (!res.ok) throw new Error('Failed saving log to server');
+        const savedDoc = await res.json();
+        const updatedList = [savedDoc, ...entries];
+        setEntries(updatedList);
+        localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(updatedList));
+      }
+    } catch (e) {
+      console.error('Save API sync failed, falling back to localized container state', e);
+      const nextId = targetId || `trade-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+      const savedEntry: TradeEntry = {
+        ...entryData,
+        id: nextId
+      } as TradeEntry;
 
-    let updated: TradeEntry[];
-    if (isEditing) {
-      updated = entries.map((e) => (e.id === targetId ? savedEntry : e));
-    } else {
-      updated = [savedEntry, ...entries];
+      const updatedList = isEditing 
+        ? entries.map((e) => (e.id === targetId ? savedEntry : e))
+        : [savedEntry, ...entries];
+
+      setEntries(updatedList);
+      localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(updatedList));
     }
-    saveToDB(updated);
 
     setIsFormOpen(false);
     setEditingEntry(null);
   };
 
   const handleDeleteEntry = async (id: string) => {
+    try {
+      const res = await fetch(`/api/logs/${id}`, {
+        method: 'DELETE'
+      });
+      if (!res.ok) throw new Error('Failed deleting log from server');
+    } catch (e) {
+      console.error('Delete API sync failed, falling back to local delete update', e);
+    }
+
     const updated = entries.filter((e) => e.id !== id);
-    saveToDB(updated);
+    setEntries(updated);
+    localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(updated));
 
     if (selectedEntry?.id === id) {
       setSelectedEntry(null);
@@ -190,6 +240,20 @@ export default function App() {
 
   const handleClearAllJournal = () => {
     setIsClearingAll(true);
+  };
+
+  const executeClearDatabase = async () => {
+    try {
+      const res = await fetch('/api/logs/reset', {
+        method: 'POST'
+      });
+      if (!res.ok) throw new Error('Failed clearing database from server');
+    } catch (e) {
+      console.error('Reset database API error', e);
+    }
+    setEntries([]);
+    localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify([]));
+    setIsClearingAll(false);
   };
 
   return (
@@ -277,7 +341,7 @@ export default function App() {
       <footer className="border-t border-geo-border py-6 px-5 mt-12 bg-geo-header text-[11px] text-slate-500 font-mono flex flex-col md:flex-row justify-between items-center gap-4 max-w-7xl w-full mx-auto" id="app-footer">
         <p>LACC Trading Journal Desk &bull; Built under Geometric Balance architectural principles</p>
         <p className="text-slate-550 text-slate-500 uppercase tracking-wider text-[10px]">
-          LOCAL STORAGE: OFFLINE PERSISTENCE KEY-VALUE ACTIVE
+          {apiError ? 'FALLBACK: LOCAL CACHE PERSISTENCE ENGINE ACTIVE' : 'PERSISTENCE: REAL-TIME FULL-STACK JSON STORAGE SYNCED'}
         </p>
       </footer>
 
@@ -390,10 +454,7 @@ export default function App() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => {
-                    saveToDB([]);
-                    setIsClearingAll(false);
-                  }}
+                  onClick={executeClearDatabase}
                   className="w-1/2 h-9 bg-rose-600 hover:bg-rose-700 text-white text-[10.5px] font-bold font-mono rounded-none transition-colors uppercase cursor-pointer"
                 >
                   Confirm Reset
