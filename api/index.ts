@@ -1,20 +1,26 @@
 import express from "express";
 import path from "path";
 import fs from "fs";
-import { createServer as createViteServer } from "vite";
 
-const PORT = 3000;
+const app = express();
+
+// Configure body limits for high-volume uploads such as position flow screenshot previews
+app.use(express.json({ limit: "50mb" }));
+app.use(express.urlencoded({ limit: "50mb", extended: true }));
+
+// Detect serverless environment to use writable /tmp cache bounds
 const DATA_DIR = process.env.VERCEL
   ? "/tmp"
   : path.join(process.cwd(), "data");
+
 const DATA_FILE = path.join(DATA_DIR, "logs.json");
 
-// Ensure data directory exists
+// Ensure data directory bounds are initialized
 if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
 }
 
-// Default initial Seed entries
+// Initial seed entries
 const SEED_ENTRIES = [
   {
     id: "seed-trade-1",
@@ -93,7 +99,7 @@ const SEED_ENTRIES = [
   }
 ];
 
-// Read logs from persistence
+// Read helper logs function
 function readLogs() {
   if (!fs.existsSync(DATA_FILE)) {
     fs.writeFileSync(DATA_FILE, JSON.stringify(SEED_ENTRIES, null, 2), "utf-8");
@@ -103,110 +109,84 @@ function readLogs() {
     const data = fs.readFileSync(DATA_FILE, "utf-8");
     return JSON.parse(data);
   } catch (err) {
-    console.error("Error reading logs file, restoring seed entries", err);
+    console.warn("Soft conflict reading logs. Fallback to seed entries", err);
     return SEED_ENTRIES;
   }
 }
 
-// Write logs to persistence
+// Write helper logs function
 function writeLogs(logs: any[]) {
   fs.writeFileSync(DATA_FILE, JSON.stringify(logs, null, 2), "utf-8");
 }
 
-async function startServer() {
-  const app = express();
-
-  // Configure high body limit for screenshots (base64 image uploads)
-  app.use(express.json({ limit: "50mb" }));
-  app.use(express.urlencoded({ limit: "50mb", extended: true }));
-
-  // API logs retrieval
-  app.get("/api/logs", (req, res) => {
-    try {
-      const logs = readLogs();
-      res.json(logs);
-    } catch (e: any) {
-      res.status(500).json({ error: e.message || "Failed to read logs" });
-    }
-  });
-
-  // Create log entry
-  app.post("/api/logs", (req, res) => {
-    try {
-      const newEntry = req.body;
-      if (!newEntry.id) {
-        newEntry.id = `trade-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
-      }
-      const logs = readLogs();
-      const updated = [newEntry, ...logs];
-      writeLogs(updated);
-      res.status(201).json(newEntry);
-    } catch (e: any) {
-      res.status(500).json({ error: e.message || "Failed to create log" });
-    }
-  });
-
-  // Update log entry
-  app.put("/api/logs/:id", (req, res) => {
-    try {
-      const { id } = req.params;
-      const updatedEntry = req.body;
-      const logs = readLogs();
-      
-      const index = logs.findIndex((item: any) => item.id === id);
-      if (index === -1) {
-        return res.status(404).json({ error: "Log entry not found" });
-      }
-
-      logs[index] = { ...logs[index], ...updatedEntry, id }; // Guard same ID
-      writeLogs(logs);
-      res.json(logs[index]);
-    } catch (e: any) {
-      res.status(500).json({ error: e.message || "Failed to update log" });
-    }
-  });
-
-  // Delete log entry
-  app.delete("/api/logs/:id", (req, res) => {
-    try {
-      const { id } = req.params;
-      const logs = readLogs();
-      const filtered = logs.filter((item: any) => item.id !== id);
-      writeLogs(filtered);
-      res.json({ success: true, deletedId: id });
-    } catch (e: any) {
-      res.status(500).json({ error: e.message || "Failed to delete log" });
-    }
-  });
-
-  // Reset database config
-  app.post("/api/logs/reset", (req, res) => {
-    try {
-      writeLogs([]);
-      res.json({ success: true });
-    } catch (e: any) {
-      res.status(500).json({ error: e.message || "Failed to reset database logs" });
-    }
-  });
-
-  // Setup Vite Dev middleware or static folder serving
-  if (process.env.NODE_ENV !== "production") {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: "spa",
-    });
-    app.use(vite.middlewares);
-  } else {
-    const distPath = path.join(process.cwd(), "dist");
-    app.use(express.static(distPath));
-    app.get("*", (req, res) => {
-      res.sendFile(path.join(distPath, "index.html"));
-    });
+// API endpoint - Fetch logs
+app.get("/api/logs", (req, res) => {
+  try {
+    const logs = readLogs();
+    res.json(logs);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message || "Failed to retrieve database logs" });
   }
+});
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`[Backend Server] listening on http://localhost:${PORT}`);
-  });
-}
+// API endpoint - Add log
+app.post("/api/logs", (req, res) => {
+  try {
+    const newEntry = req.body;
+    if (!newEntry.id) {
+      newEntry.id = `trade-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+    }
+    const logs = readLogs();
+    const updated = [newEntry, ...logs];
+    writeLogs(updated);
+    res.status(201).json(newEntry);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message || "Failed to save entry log" });
+  }
+});
 
-startServer();
+// API endpoint - Update log
+app.put("/api/logs/:id", (req, res) => {
+  try {
+    const { id } = req.params;
+    const updatedEntry = req.body;
+    const logs = readLogs();
+
+    const idx = logs.findIndex((item: any) => item.id === id);
+    if (idx === -1) {
+      return res.status(404).json({ error: "Trade entry log not found" });
+    }
+
+    logs[idx] = { ...logs[idx], ...updatedEntry, id };
+    writeLogs(logs);
+    res.json(logs[idx]);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message || "Failed to modify entry log" });
+  }
+});
+
+// API endpoint - Delete log
+app.delete("/api/logs/:id", (req, res) => {
+  try {
+    const { id } = req.params;
+    const logs = readLogs();
+    const filtered = logs.filter((item: any) => item.id !== id);
+    writeLogs(filtered);
+    res.json({ success: true, deletedId: id });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message || "Failed to destroy log entry" });
+  }
+});
+
+// API endpoint - Reset database
+app.post("/api/logs/reset", (req, res) => {
+  try {
+    writeLogs([]);
+    res.json({ success: true });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message || "Failed to wipe logging register" });
+  }
+});
+
+// Export default application handler so Vercel hooks into it flawlessly
+export default app;
