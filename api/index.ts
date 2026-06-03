@@ -382,7 +382,8 @@ app.post("/api/auth/login", (req, res) => {
 
     res.json({
       token,
-      user: { id: user.id, username: user.username }
+      user: { id: user.id, username: user.username },
+      syncPayload: { id: user.id, username: user.username, passwordHash: user.passwordHash, salt: user.salt, createdAt: user.createdAt }
     });
   } catch (e: any) {
     res.status(500).json({ error: e.message || "Failed to sign in" });

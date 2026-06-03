@@ -251,7 +251,24 @@ export default function App() {
   };
 
   useEffect(() => {
+    const syncBackupUsersOnStartup = async () => {
+      try {
+        const rawBackup = localStorage.getItem('trades_desk_users_backup');
+        const backupUsers = rawBackup ? JSON.parse(rawBackup) : [];
+        if (Array.isArray(backupUsers) && backupUsers.length > 0) {
+          await fetch('/api/auth/sync', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ users: backupUsers })
+          });
+        }
+      } catch (e) {
+        console.warn('Failed to auto-sync backup users on startup', e);
+      }
+    };
+
     const verifyToken = async () => {
+      await syncBackupUsersOnStartup();
       const savedToken = localStorage.getItem('trades_desk_token_v2');
       if (savedToken) {
         try {
