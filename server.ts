@@ -12,6 +12,7 @@ const DATA_DIR = process.env.VERCEL
 const DATA_FILE = path.join(DATA_DIR, "logs.json");
 const USERS_FILE = path.join(DATA_DIR, "users.json");
 const SESSIONS_FILE = path.join(DATA_DIR, "sessions.json");
+const CAPITAL_FILE = path.join(DATA_DIR, "capital.json");
 
 // Ensure data directory exists
 if (!fs.existsSync(DATA_DIR)) {
@@ -133,6 +134,25 @@ function readUsers(): any[] {
 
 function writeUsers(users: any[]) {
   fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2), "utf-8");
+}
+
+// Read/Write Capital helper
+function readCapital(): any[] {
+  if (!fs.existsSync(CAPITAL_FILE)) {
+    fs.writeFileSync(CAPITAL_FILE, JSON.stringify([], null, 2), "utf-8");
+    return [];
+  }
+  try {
+    const data = fs.readFileSync(CAPITAL_FILE, "utf-8");
+    return JSON.parse(data);
+  } catch (err) {
+    console.error("Error reading capital file", err);
+    return [];
+  }
+}
+
+function writeCapital(capital: any[]) {
+  fs.writeFileSync(CAPITAL_FILE, JSON.stringify(capital, null, 2), "utf-8");
 }
 
 // Read/Write Sessions helper
@@ -549,6 +569,113 @@ async function startServer() {
       res.json({ success: true });
     } catch (e: any) {
       res.status(500).json({ error: e.message || "Failed to reset database logs" });
+    }
+  });
+
+  // ==================== CAPITAL API ROUTES (SCOPED TO AUTHENTICATED USER) ====================
+
+  // POST: Sync/Restore entire categories of capital entries from the client's localStorage (Serverless Auto-Recovery)
+  app.post("/api/capital/sync", authenticateToken, (req: any, res) => {
+    try {
+      const { capital: clientCapital } = req.body;
+      if (!Array.isArray(clientCapital)) {
+        return res.status(400).json({ error: "Invalid capital sync request format" });
+      }
+
+      const serverCapital = readCapital();
+      
+      // Filter out existing server capital belonging to the current user
+      const otherUsersCapital = serverCapital.filter((item: any) => item.ownerId !== req.user.id);
+
+      // Enforce correct ownerId of the current user on all incoming capital to make it safe
+      const verifiedClientCapital = clientCapital.map((item: any) => ({
+        ...item,
+        ownerId: req.user.id
+      }));
+
+      // Recombine and write
+      const combined = [...verifiedClientCapital, ...otherUsersCapital];
+      writeCapital(combined);
+
+      res.json({ success: true, syncedCapitalCount: verifiedClientCapital.length });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message || "Failed to sync capital entries" });
+    }
+  });
+
+  // API capital retrieval
+  app.get("/api/capital", authenticateToken, (req: any, res) => {
+    try {
+      const capital = readCapital();
+      const userCapital = capital.filter((item: any) => item.ownerId === req.user.id);
+      res.json(userCapital);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message || "Failed to read capital entries" });
+    }
+  });
+
+  // Create capital entry
+  app.post("/api/capital", authenticateToken, (req: any, res) => {
+    try {
+      const newEntry = req.body;
+      newEntry.id = `cap-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+      newEntry.ownerId = req.user.id; // Assign owner explicitly
+
+      const capital = readCapital();
+      const updated = [newEntry, ...capital];
+      writeCapital(updated);
+      res.status(201).json(newEntry);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message || "Failed to create capital entry" });
+    }
+  });
+
+  // Update capital entry
+  app.put("/api/capital/:id", authenticateToken, (req: any, res) => {
+    try {
+      const { id } = req.params;
+      const updatedEntry = req.body;
+      const capital = readCapital();
+      
+      const index = capital.findIndex((item: any) => item.id === id);
+      if (index === -1) {
+        return res.status(404).json({ error: "Capital entry not found" });
+      }
+
+      // Check ownership
+      if (capital[index].ownerId !== req.user.id) {
+        return res.status(403).json({ error: "Access denied to compile modifications on this resource" });
+      }
+
+      capital[index] = { ...capital[index], ...updatedEntry, id, ownerId: req.user.id }; // Maintain same ID & ownerId
+      writeCapital(capital);
+      res.json(capital[index]);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message || "Failed to update capital entry" });
+    }
+  });
+
+  // Delete capital entry
+  app.delete("/api/capital/:id", authenticateToken, (req: any, res) => {
+    try {
+      const { id } = req.params;
+      const capital = readCapital();
+      const index = capital.findIndex((item: any) => item.id === id);
+      
+      if (index === -1) {
+        return res.status(404).json({ error: "Capital entry not found" });
+      }
+
+      // Check ownership
+      if (capital[index].ownerId !== req.user.id) {
+        return res.status(403).json({ error: "Access denied to compile deletion on this resource" });
+      }
+
+      const filtered = capital.filter((item: any) => item.id !== id);
+      writeCapital(filtered);
+      res.json({ success: true, deletedId: id });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message || "Failed to delete capital entry" });
     }
   });
 
