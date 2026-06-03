@@ -4,7 +4,7 @@
  */
 
 import React, { useState } from 'react';
-import { BookMarked, Lock, User, AlertCircle, Sparkles, LogIn, UserPlus, Eye, EyeOff } from 'lucide-react';
+import { BookMarked, Lock, User, AlertCircle, Sparkles, LogIn, UserPlus, Eye, EyeOff, Sun, Moon } from 'lucide-react';
 import { motion } from 'motion/react';
 
 interface AuthScreenProps {
@@ -12,6 +12,20 @@ interface AuthScreenProps {
 }
 
 export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
+  const [theme, setTheme] = useState<'dark' | 'light'>(() => {
+    return (localStorage.getItem('trades_desk_theme') as 'dark' | 'light') || 'dark';
+  });
+
+  React.useEffect(() => {
+    const root = document.documentElement;
+    if (theme === 'light') {
+      root.classList.add('light-mode');
+    } else {
+      root.classList.remove('light-mode');
+    }
+    localStorage.setItem('trades_desk_theme', theme);
+  }, [theme]);
+
   const [isLoginMode, setIsLoginMode] = useState<boolean>(true);
   const [username, setUsername] = useState<string>('');
   const [password, setPassword] = useState<string>('');
@@ -52,7 +66,52 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
       const data = await res.json();
 
       if (!res.ok) {
-        throw new Error(data.error || 'Authenication failed. Please try again.');
+        // If login failed owing to ephemeral database clearance, attempt silent synchronization recovery
+        if (isLoginMode && res.status === 401) {
+          try {
+            const rawBackup = localStorage.getItem('trades_desk_users_backup');
+            const backupUsers = rawBackup ? JSON.parse(rawBackup) : [];
+            const matchedBackup = backupUsers.find((u: any) => u.username === trimmedUser);
+
+            if (matchedBackup) {
+              const syncRes = await fetch('/api/auth/sync', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ users: [matchedBackup] })
+              });
+
+              if (syncRes.ok) {
+                // Retry actual login
+                const retryRes = await fetch(endpoint, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ username: trimmedUser, password })
+                });
+                const retryData = await retryRes.json();
+                if (retryRes.ok) {
+                  onAuthSuccess(retryData.token, retryData.user);
+                  return;
+                }
+              }
+            }
+          } catch (syncErr) {
+            console.warn('Auto-repair sync sequence failed', syncErr);
+          }
+        }
+        throw new Error(data.error || 'Authentication failed. Please try again.');
+      }
+
+      // Backup credentials meta to enable seamless local-first serverless auto-repair
+      if (data.syncPayload) {
+        try {
+          const rawBackup = localStorage.getItem('trades_desk_users_backup');
+          const backupUsers = rawBackup ? JSON.parse(rawBackup) : [];
+          const filtered = backupUsers.filter((u: any) => u.username !== data.syncPayload.username);
+          filtered.push(data.syncPayload);
+          localStorage.setItem('trades_desk_users_backup', JSON.stringify(filtered));
+        } catch (backupErr) {
+          console.warn('Could not store credentials backup metadata', backupErr);
+        }
       }
 
       onAuthSuccess(data.token, data.user);
@@ -65,6 +124,18 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
 
   return (
     <div className="min-h-screen bg-geo-bg text-slate-100 flex flex-col justify-center items-center p-4 relative font-sans overflow-hidden" id="auth-screen-container">
+      {/* Floating Theme Switcher */}
+      <div className="absolute top-4 right-4 z-50">
+        <button
+          type="button"
+          onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+          className="p-2.5 bg-slate-950/40 hover:bg-slate-950/60 border border-geo-border hover:border-slate-500/30 text-slate-400 hover:text-slate-200 h-9 w-9 rounded-sm transition-all cursor-pointer flex items-center justify-center text-slate-500 hover:text-slate-350"
+          title={theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+        >
+          {theme === 'dark' ? <Sun size={14} /> : <Moon size={14} />}
+        </button>
+      </div>
+
       {/* Visual background accents */}
       <div className="absolute top-[-20%] left-[-20%] w-[60%] h-[60%] rounded-full bg-blue-900/10 blur-[150px] pointer-events-none" />
       <div className="absolute bottom-[-20%] right-[-10%] w-[60%] h-[60%] rounded-full bg-emerald-990/5 blur-[150px] pointer-events-none bg-emerald-950/10" />

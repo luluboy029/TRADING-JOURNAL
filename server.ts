@@ -12,6 +12,7 @@ const DATA_DIR = process.env.VERCEL
 const DATA_FILE = path.join(DATA_DIR, "logs.json");
 const USERS_FILE = path.join(DATA_DIR, "users.json");
 const SESSIONS_FILE = path.join(DATA_DIR, "sessions.json");
+const CAPITAL_FILE = path.join(DATA_DIR, "capital.json");
 
 // Ensure data directory exists
 if (!fs.existsSync(DATA_DIR)) {
@@ -100,6 +101,17 @@ const SEED_ENTRIES = [
 // Read/Write Logs helper
 function readLogs(): any[] {
   if (!fs.existsSync(DATA_FILE)) {
+    // Attempt to seed from standard pre-committed portfolio file if available in the bundle
+    const bundleFile = path.join(process.cwd(), "data", "logs.json");
+    if (fs.existsSync(bundleFile)) {
+      try {
+        const data = fs.readFileSync(bundleFile, "utf-8");
+        fs.writeFileSync(DATA_FILE, data, "utf-8");
+        return JSON.parse(data);
+      } catch (err) {
+        console.warn("Could not copy pre-committed logs seed to temporary partition", err);
+      }
+    }
     fs.writeFileSync(DATA_FILE, JSON.stringify([], null, 2), "utf-8");
     return [];
   }
@@ -119,6 +131,17 @@ function writeLogs(logs: any[]) {
 // Read/Write Users helper
 function readUsers(): any[] {
   if (!fs.existsSync(USERS_FILE)) {
+    // Attempt to seed from standard pre-committed users file if available in the bundle
+    const bundleFile = path.join(process.cwd(), "data", "users.json");
+    if (fs.existsSync(bundleFile)) {
+      try {
+        const data = fs.readFileSync(bundleFile, "utf-8");
+        fs.writeFileSync(USERS_FILE, data, "utf-8");
+        return JSON.parse(data);
+      } catch (err) {
+        console.warn("Could not copy pre-committed users seed to temporary partition", err);
+      }
+    }
     fs.writeFileSync(USERS_FILE, JSON.stringify([], null, 2), "utf-8");
     return [];
   }
@@ -133,6 +156,36 @@ function readUsers(): any[] {
 
 function writeUsers(users: any[]) {
   fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2), "utf-8");
+}
+
+// Read/Write Capital helper
+function readCapital(): any[] {
+  if (!fs.existsSync(CAPITAL_FILE)) {
+    // Attempt to seed from standard pre-committed capital file if available in the bundle
+    const bundleFile = path.join(process.cwd(), "data", "capital.json");
+    if (fs.existsSync(bundleFile)) {
+      try {
+        const data = fs.readFileSync(bundleFile, "utf-8");
+        fs.writeFileSync(CAPITAL_FILE, data, "utf-8");
+        return JSON.parse(data);
+      } catch (err) {
+        console.warn("Could not copy pre-committed capital seed to temporary partition", err);
+      }
+    }
+    fs.writeFileSync(CAPITAL_FILE, JSON.stringify([], null, 2), "utf-8");
+    return [];
+  }
+  try {
+    const data = fs.readFileSync(CAPITAL_FILE, "utf-8");
+    return JSON.parse(data);
+  } catch (err) {
+    console.error("Error reading capital file", err);
+    return [];
+  }
+}
+
+function writeCapital(capital: any[]) {
+  fs.writeFileSync(CAPITAL_FILE, JSON.stringify(capital, null, 2), "utf-8");
 }
 
 // Read/Write Sessions helper
@@ -233,6 +286,43 @@ async function startServer() {
 
   // ==================== AUTHENTICATION API ROUTES ====================
 
+  // POST: Sync user accounts database from client localStorage (Serverless Auto-Recovery)
+  app.post("/api/auth/sync", (req, res) => {
+    try {
+      const { users: localUsers } = req.body;
+      if (!Array.isArray(localUsers)) {
+        return res.status(400).json({ error: "Invalid sync request format" });
+      }
+
+      const currentUsers = readUsers();
+      let updatedCount = 0;
+
+      for (const u of localUsers) {
+        if (!u.username || !u.id || !u.passwordHash || !u.salt) continue;
+        const normalized = u.username.trim().toLowerCase();
+        const exists = currentUsers.some((curr: any) => curr.username === normalized || curr.id === u.id);
+        if (!exists) {
+          currentUsers.push({
+            id: u.id,
+            username: normalized,
+            passwordHash: u.passwordHash,
+            salt: u.salt,
+            createdAt: u.createdAt || new Date().toISOString()
+          });
+          updatedCount++;
+        }
+      }
+
+      if (updatedCount > 0) {
+        writeUsers(currentUsers);
+      }
+
+      res.json({ success: true, syncedUsersCount: updatedCount });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message || "Failed to sync user accounts" });
+    }
+  });
+
   // POST: Sign Up
   app.post("/api/auth/signup", (req, res) => {
     try {
@@ -272,6 +362,20 @@ async function startServer() {
       users.push(newUser);
       writeUsers(users);
 
+      // One-time pre-load seed entries for this brand new user inside the backend logs storage!
+      try {
+        const logs = readLogs();
+        const userSeeds = SEED_ENTRIES.map((entry) => ({
+          ...entry,
+          id: `trade-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
+          ownerId: userId
+        }));
+        const updatedLogs = [...userSeeds, ...logs];
+        writeLogs(updatedLogs);
+      } catch (seedErr) {
+        console.error("Failed to seed initial user logs on signup", seedErr);
+      }
+
       // Create session
       const token = generateToken(userId, trimmedUser);
       const sessions = readSessions();
@@ -284,7 +388,8 @@ async function startServer() {
 
       res.status(201).json({
         token,
-        user: { id: userId, username: trimmedUser }
+        user: { id: userId, username: trimmedUser },
+        syncPayload: { id: userId, username: trimmedUser, passwordHash, salt, createdAt: newUser.createdAt }
       });
     } catch (e: any) {
       res.status(500).json({ error: e.message || "Failed to complete sign up" });
@@ -324,7 +429,8 @@ async function startServer() {
 
       res.json({
         token,
-        user: { id: user.id, username: user.username }
+        user: { id: user.id, username: user.username },
+        syncPayload: { id: user.id, username: user.username, passwordHash: user.passwordHash, salt: user.salt, createdAt: user.createdAt }
       });
     } catch (e: any) {
       res.status(500).json({ error: e.message || "Failed to sign in" });
@@ -381,24 +487,40 @@ async function startServer() {
 
   // ==================== LOGS API ROUTES (SCOPED TO AUTHENTICATED USER) ====================
 
+  // POST: Sync/Restore entire categories of logs from the client's localStorage (Serverless Auto-Recovery)
+  app.post("/api/logs/sync", authenticateToken, (req: any, res) => {
+    try {
+      const { logs: clientLogs } = req.body;
+      if (!Array.isArray(clientLogs)) {
+        return res.status(400).json({ error: "Invalid logs sync request format" });
+      }
+
+      const serverLogs = readLogs();
+      
+      // Filter out existing server logs belonging to the current user
+      const otherUsersLogs = serverLogs.filter((item: any) => item.ownerId !== req.user.id);
+
+      // Enforce correct ownerId of the current user on all incoming logs to make it safe
+      const verifiedClientLogs = clientLogs.map((item: any) => ({
+        ...item,
+        ownerId: req.user.id
+      }));
+
+      // Recombine and write
+      const combined = [...verifiedClientLogs, ...otherUsersLogs];
+      writeLogs(combined);
+
+      res.json({ success: true, syncedLogsCount: verifiedClientLogs.length });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message || "Failed to sync trade logs" });
+    }
+  });
+
   // API logs retrieval
   app.get("/api/logs", authenticateToken, (req: any, res) => {
     try {
       const logs = readLogs();
-      let userLogs = logs.filter((log: any) => log.ownerId === req.user.id);
-
-      // If user has no logs, copy seed entries so they have pre-loaded default data in their personal journal!
-      if (userLogs.length === 0) {
-        const userSeeds = SEED_ENTRIES.map((entry) => ({
-          ...entry,
-          id: `trade-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
-          ownerId: req.user.id
-        }));
-        const updated = [...userSeeds, ...logs];
-        writeLogs(updated);
-        userLogs = userSeeds;
-      }
-
+      const userLogs = logs.filter((log: any) => log.ownerId === req.user.id);
       res.json(userLogs);
     } catch (e: any) {
       res.status(500).json({ error: e.message || "Failed to read logs" });
@@ -480,6 +602,113 @@ async function startServer() {
       res.json({ success: true });
     } catch (e: any) {
       res.status(500).json({ error: e.message || "Failed to reset database logs" });
+    }
+  });
+
+  // ==================== CAPITAL API ROUTES (SCOPED TO AUTHENTICATED USER) ====================
+
+  // POST: Sync/Restore entire categories of capital entries from the client's localStorage (Serverless Auto-Recovery)
+  app.post("/api/capital/sync", authenticateToken, (req: any, res) => {
+    try {
+      const { capital: clientCapital } = req.body;
+      if (!Array.isArray(clientCapital)) {
+        return res.status(400).json({ error: "Invalid capital sync request format" });
+      }
+
+      const serverCapital = readCapital();
+      
+      // Filter out existing server capital belonging to the current user
+      const otherUsersCapital = serverCapital.filter((item: any) => item.ownerId !== req.user.id);
+
+      // Enforce correct ownerId of the current user on all incoming capital to make it safe
+      const verifiedClientCapital = clientCapital.map((item: any) => ({
+        ...item,
+        ownerId: req.user.id
+      }));
+
+      // Recombine and write
+      const combined = [...verifiedClientCapital, ...otherUsersCapital];
+      writeCapital(combined);
+
+      res.json({ success: true, syncedCapitalCount: verifiedClientCapital.length });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message || "Failed to sync capital entries" });
+    }
+  });
+
+  // API capital retrieval
+  app.get("/api/capital", authenticateToken, (req: any, res) => {
+    try {
+      const capital = readCapital();
+      const userCapital = capital.filter((item: any) => item.ownerId === req.user.id);
+      res.json(userCapital);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message || "Failed to read capital entries" });
+    }
+  });
+
+  // Create capital entry
+  app.post("/api/capital", authenticateToken, (req: any, res) => {
+    try {
+      const newEntry = req.body;
+      newEntry.id = `cap-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+      newEntry.ownerId = req.user.id; // Assign owner explicitly
+
+      const capital = readCapital();
+      const updated = [newEntry, ...capital];
+      writeCapital(updated);
+      res.status(201).json(newEntry);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message || "Failed to create capital entry" });
+    }
+  });
+
+  // Update capital entry
+  app.put("/api/capital/:id", authenticateToken, (req: any, res) => {
+    try {
+      const { id } = req.params;
+      const updatedEntry = req.body;
+      const capital = readCapital();
+      
+      const index = capital.findIndex((item: any) => item.id === id);
+      if (index === -1) {
+        return res.status(404).json({ error: "Capital entry not found" });
+      }
+
+      // Check ownership
+      if (capital[index].ownerId !== req.user.id) {
+        return res.status(403).json({ error: "Access denied to compile modifications on this resource" });
+      }
+
+      capital[index] = { ...capital[index], ...updatedEntry, id, ownerId: req.user.id }; // Maintain same ID & ownerId
+      writeCapital(capital);
+      res.json(capital[index]);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message || "Failed to update capital entry" });
+    }
+  });
+
+  // Delete capital entry
+  app.delete("/api/capital/:id", authenticateToken, (req: any, res) => {
+    try {
+      const { id } = req.params;
+      const capital = readCapital();
+      const index = capital.findIndex((item: any) => item.id === id);
+      
+      if (index === -1) {
+        return res.status(404).json({ error: "Capital entry not found" });
+      }
+
+      // Check ownership
+      if (capital[index].ownerId !== req.user.id) {
+        return res.status(403).json({ error: "Access denied to compile deletion on this resource" });
+      }
+
+      const filtered = capital.filter((item: any) => item.id !== id);
+      writeCapital(filtered);
+      res.json({ success: true, deletedId: id });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message || "Failed to delete capital entry" });
     }
   });
 
