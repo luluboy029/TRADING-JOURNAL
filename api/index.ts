@@ -1,6 +1,12 @@
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 import express from "express";
 import path from "path";
 import fs from "fs";
+import crypto from "crypto";
 
 const app = express();
 
@@ -14,13 +20,15 @@ const DATA_DIR = process.env.VERCEL
   : path.join(process.cwd(), "data");
 
 const DATA_FILE = path.join(DATA_DIR, "logs.json");
+const USERS_FILE = path.join(DATA_DIR, "users.json");
+const SESSIONS_FILE = path.join(DATA_DIR, "sessions.json");
 
-// Ensure data directory bounds are initialized
+// Ensure data directory exists
 if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
 }
 
-// Initial seed entries
+// Default initial Seed entries
 const SEED_ENTRIES = [
   {
     id: "seed-trade-1",
@@ -99,94 +107,332 @@ const SEED_ENTRIES = [
   }
 ];
 
-// Read helper logs function
-function readLogs() {
+// Read/Write Logs helper
+function readLogs(): any[] {
   if (!fs.existsSync(DATA_FILE)) {
-    fs.writeFileSync(DATA_FILE, JSON.stringify(SEED_ENTRIES, null, 2), "utf-8");
-    return SEED_ENTRIES;
+    fs.writeFileSync(DATA_FILE, JSON.stringify([], null, 2), "utf-8");
+    return [];
   }
   try {
     const data = fs.readFileSync(DATA_FILE, "utf-8");
     return JSON.parse(data);
   } catch (err) {
-    console.warn("Soft conflict reading logs. Fallback to seed entries", err);
-    return SEED_ENTRIES;
+    console.error("Error reading logs file", err);
+    return [];
   }
 }
 
-// Write helper logs function
 function writeLogs(logs: any[]) {
   fs.writeFileSync(DATA_FILE, JSON.stringify(logs, null, 2), "utf-8");
 }
 
-// API endpoint - Fetch logs
-app.get("/api/logs", (req, res) => {
+// Read/Write Users helper
+function readUsers(): any[] {
+  if (!fs.existsSync(USERS_FILE)) {
+    fs.writeFileSync(USERS_FILE, JSON.stringify([], null, 2), "utf-8");
+    return [];
+  }
   try {
-    const logs = readLogs();
-    res.json(logs);
+    const data = fs.readFileSync(USERS_FILE, "utf-8");
+    return JSON.parse(data);
+  } catch (err) {
+    console.error("Error reading users file", err);
+    return [];
+  }
+}
+
+function writeUsers(users: any[]) {
+  fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2), "utf-8");
+}
+
+// Read/Write Sessions helper
+function readSessions(): { [token: string]: { userId: string; username: string; expiresAt: number } } {
+  if (!fs.existsSync(SESSIONS_FILE)) {
+    fs.writeFileSync(SESSIONS_FILE, JSON.stringify({}, null, 2), "utf-8");
+    return {};
+  }
+  try {
+    const data = fs.readFileSync(SESSIONS_FILE, "utf-8");
+    return JSON.parse(data);
+  } catch (err) {
+    console.error("Error reading sessions file", err);
+    return {};
+  }
+}
+
+function writeSessions(sessions: any) {
+  fs.writeFileSync(SESSIONS_FILE, JSON.stringify(sessions, null, 2), "utf-8");
+}
+
+// Password cryptography helpers
+function hashPassword(password: string, salt: string): string {
+  return crypto.pbkdf2Sync(password, salt, 1000, 64, "sha512").toString("hex");
+}
+
+function generateSalt(): string {
+  return crypto.randomBytes(16).toString("hex");
+}
+
+function generateToken(): string {
+  return crypto.randomBytes(32).toString("hex");
+}
+
+// Authentication middleware
+function authenticateToken(req: any, res: any, next: any) {
+  const authHeader = req.headers["authorization"];
+  const token = authHeader && authHeader.split(" ")[1];
+
+  if (!token) {
+    return res.status(401).json({ error: "Access token required" });
+  }
+
+  const sessions = readSessions();
+  const session = sessions[token];
+
+  if (!session || session.expiresAt < Date.now()) {
+    return res.status(401).json({ error: "Session invalid or expired" });
+  }
+
+  req.user = { id: session.userId, username: session.username };
+  next();
+}
+
+// ==================== AUTHENTICATION API ROUTES ====================
+
+// POST: Sign Up
+app.post("/api/auth/signup", (req, res) => {
+  try {
+    const { username, password } = req.body;
+    if (!username || !password || typeof username !== "string" || typeof password !== "string") {
+      return res.status(400).json({ error: "Username and password are required" });
+    }
+
+    const trimmedUser = username.trim().toLowerCase();
+    if (trimmedUser.length < 3) {
+      return res.status(400).json({ error: "Username must be at least 3 characters" });
+    }
+    if (password.length < 4) {
+      return res.status(400).json({ error: "Password must be at least 4 characters" });
+    }
+
+    const users = readUsers();
+    const existingUser = users.find((u: any) => u.username === trimmedUser);
+    if (existingUser) {
+      return res.status(400).json({ error: "Username already taken" });
+    }
+
+    const salt = generateSalt();
+    const passwordHash = hashPassword(password, salt);
+    const userId = `user-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+
+    const newUser = {
+      id: userId,
+      username: trimmedUser,
+      passwordHash,
+      salt,
+      createdAt: new Date().toISOString()
+    };
+
+    users.push(newUser);
+    writeUsers(users);
+
+    // Create session
+    const token = generateToken();
+    const sessions = readSessions();
+    sessions[token] = {
+      userId,
+      username: trimmedUser,
+      expiresAt: Date.now() + 1000 * 60 * 60 * 24 * 7 // 7 days expiration
+    };
+    writeSessions(sessions);
+
+    res.status(201).json({
+      token,
+      user: { id: userId, username: trimmedUser }
+    });
   } catch (e: any) {
-    res.status(500).json({ error: e.message || "Failed to retrieve database logs" });
+    res.status(500).json({ error: e.message || "Failed to complete sign up" });
   }
 });
 
-// API endpoint - Add log
-app.post("/api/logs", (req, res) => {
+// POST: Sign In
+app.post("/api/auth/login", (req, res) => {
+  try {
+    const { username, password } = req.body;
+    if (!username || !password) {
+      return res.status(400).json({ error: "Username and password are required" });
+    }
+
+    const trimmedUser = username.trim().toLowerCase();
+    const users = readUsers();
+    const user = users.find((u: any) => u.username === trimmedUser);
+
+    if (!user) {
+      return res.status(401).json({ error: "Invalid username or password" });
+    }
+
+    const hash = hashPassword(password, user.salt);
+    if (hash !== user.passwordHash) {
+      return res.status(401).json({ error: "Invalid username or password" });
+    }
+
+    // Generate session token
+    const token = generateToken();
+    const sessions = readSessions();
+    sessions[token] = {
+      userId: user.id,
+      username: user.username,
+      expiresAt: Date.now() + 1000 * 60 * 60 * 24 * 7 // 7 days expiration
+    };
+    writeSessions(sessions);
+
+    res.json({
+      token,
+      user: { id: user.id, username: user.username }
+    });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message || "Failed to sign in" });
+  }
+});
+
+// GET: Validate session / Get user profile
+app.get("/api/auth/me", (req, res) => {
+  const authHeader = req.headers["authorization"];
+  const token = authHeader && authHeader.split(" ")[1];
+
+  if (!token) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  const sessions = readSessions();
+  const session = sessions[token];
+
+  if (!session || session.expiresAt < Date.now()) {
+    return res.status(401).json({ error: "Session invalid or expired" });
+  }
+
+  res.json({
+    user: { id: session.userId, username: session.username }
+  });
+});
+
+// POST: Log out
+app.post("/api/auth/logout", (req, res) => {
+  const authHeader = req.headers["authorization"];
+  const token = authHeader && authHeader.split(" ")[1];
+
+  if (token) {
+    const sessions = readSessions();
+    if (sessions[token]) {
+      delete sessions[token];
+      writeSessions(sessions);
+    }
+  }
+  res.json({ success: true });
+});
+
+// ==================== LOGS API ROUTES (SCOPED TO AUTHENTICATED USER) ====================
+
+// API logs retrieval
+app.get("/api/logs", authenticateToken, (req: any, res) => {
+  try {
+    const logs = readLogs();
+    let userLogs = logs.filter((log: any) => log.ownerId === req.user.id);
+
+    // If user has no logs, copy seed entries so they have pre-loaded default data in their personal journal!
+    if (userLogs.length === 0) {
+      const userSeeds = SEED_ENTRIES.map((entry) => ({
+        ...entry,
+        id: `trade-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
+        ownerId: req.user.id
+      }));
+      const updated = [...userSeeds, ...logs];
+      writeLogs(updated);
+      userLogs = userSeeds;
+    }
+
+    res.json(userLogs);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message || "Failed to read logs" });
+  }
+});
+
+// Create log entry
+app.post("/api/logs", authenticateToken, (req: any, res) => {
   try {
     const newEntry = req.body;
-    if (!newEntry.id) {
-      newEntry.id = `trade-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
-    }
+    newEntry.id = `trade-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+    newEntry.ownerId = req.user.id; // Assign owner explicitly
+
     const logs = readLogs();
     const updated = [newEntry, ...logs];
     writeLogs(updated);
     res.status(201).json(newEntry);
   } catch (e: any) {
-    res.status(500).json({ error: e.message || "Failed to save entry log" });
+    res.status(500).json({ error: e.message || "Failed to create log" });
   }
 });
 
-// API endpoint - Update log
-app.put("/api/logs/:id", (req, res) => {
+// Update log entry
+app.put("/api/logs/:id", authenticateToken, (req: any, res) => {
   try {
     const { id } = req.params;
     const updatedEntry = req.body;
     const logs = readLogs();
-
-    const idx = logs.findIndex((item: any) => item.id === id);
-    if (idx === -1) {
-      return res.status(404).json({ error: "Trade entry log not found" });
+    
+    const index = logs.findIndex((item: any) => item.id === id);
+    if (index === -1) {
+      return res.status(404).json({ error: "Log entry not found" });
     }
 
-    logs[idx] = { ...logs[idx], ...updatedEntry, id };
+    // Check ownership
+    if (logs[index].ownerId !== req.user.id) {
+      return res.status(403).json({ error: "Access denied to compile modifications on this resource" });
+    }
+
+    logs[index] = { ...logs[index], ...updatedEntry, id, ownerId: req.user.id }; // Maintain same ID & ownerId
     writeLogs(logs);
-    res.json(logs[idx]);
+    res.json(logs[index]);
   } catch (e: any) {
-    res.status(500).json({ error: e.message || "Failed to modify entry log" });
+    res.status(500).json({ error: e.message || "Failed to update log" });
   }
 });
 
-// API endpoint - Delete log
-app.delete("/api/logs/:id", (req, res) => {
+// Delete log entry
+app.delete("/api/logs/:id", authenticateToken, (req: any, res) => {
   try {
     const { id } = req.params;
     const logs = readLogs();
+    const index = logs.findIndex((item: any) => item.id === id);
+    
+    if (index === -1) {
+      return res.status(404).json({ error: "Log entry not found" });
+    }
+
+    // Check ownership
+    if (logs[index].ownerId !== req.user.id) {
+      return res.status(403).json({ error: "Access denied to compile deletion on this resource" });
+    }
+
     const filtered = logs.filter((item: any) => item.id !== id);
     writeLogs(filtered);
     res.json({ success: true, deletedId: id });
   } catch (e: any) {
-    res.status(500).json({ error: e.message || "Failed to destroy log entry" });
+    res.status(500).json({ error: e.message || "Failed to delete log" });
   }
 });
 
-// API endpoint - Reset database
-app.post("/api/logs/reset", (req, res) => {
+// Reset database logs for the current user only
+app.post("/api/logs/reset", authenticateToken, (req: any, res) => {
   try {
-    writeLogs([]);
+    const logs = readLogs();
+    // Keep other users' logs, but filter out current user's logs
+    const filtered = logs.filter((item: any) => item.ownerId !== req.user.id);
+    writeLogs(filtered);
     res.json({ success: true });
   } catch (e: any) {
-    res.status(500).json({ error: e.message || "Failed to wipe logging register" });
+    res.status(500).json({ error: e.message || "Failed to reset database logs" });
   }
 });
 
-// Export default application handler so Vercel hooks into it flawlessly
 export default app;
