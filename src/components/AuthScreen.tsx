@@ -52,7 +52,52 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
       const data = await res.json();
 
       if (!res.ok) {
-        throw new Error(data.error || 'Authenication failed. Please try again.');
+        // If login failed owing to ephemeral database clearance, attempt silent synchronization recovery
+        if (isLoginMode && res.status === 401) {
+          try {
+            const rawBackup = localStorage.getItem('trades_desk_users_backup');
+            const backupUsers = rawBackup ? JSON.parse(rawBackup) : [];
+            const matchedBackup = backupUsers.find((u: any) => u.username === trimmedUser);
+
+            if (matchedBackup) {
+              const syncRes = await fetch('/api/auth/sync', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ users: [matchedBackup] })
+              });
+
+              if (syncRes.ok) {
+                // Retry actual login
+                const retryRes = await fetch(endpoint, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ username: trimmedUser, password })
+                });
+                const retryData = await retryRes.json();
+                if (retryRes.ok) {
+                  onAuthSuccess(retryData.token, retryData.user);
+                  return;
+                }
+              }
+            }
+          } catch (syncErr) {
+            console.warn('Auto-repair sync sequence failed', syncErr);
+          }
+        }
+        throw new Error(data.error || 'Authentication failed. Please try again.');
+      }
+
+      // Backup credentials meta to enable seamless local-first serverless auto-repair
+      if (data.syncPayload) {
+        try {
+          const rawBackup = localStorage.getItem('trades_desk_users_backup');
+          const backupUsers = rawBackup ? JSON.parse(rawBackup) : [];
+          const filtered = backupUsers.filter((u: any) => u.username !== data.syncPayload.username);
+          filtered.push(data.syncPayload);
+          localStorage.setItem('trades_desk_users_backup', JSON.stringify(filtered));
+        } catch (backupErr) {
+          console.warn('Could not store credentials backup metadata', backupErr);
+        }
       }
 
       onAuthSuccess(data.token, data.user);

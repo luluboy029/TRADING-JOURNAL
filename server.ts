@@ -159,12 +159,37 @@ function hashPassword(password: string, salt: string): string {
   return crypto.pbkdf2Sync(password, salt, 1000, 64, "sha512").toString("hex");
 }
 
+const JWT_SECRET = process.env.JWT_SECRET || "trading_desk_standard_secure_secret_hash_value_1009";
+
 function generateSalt(): string {
   return crypto.randomBytes(16).toString("hex");
 }
 
-function generateToken(): string {
-  return crypto.randomBytes(32).toString("hex");
+function generateToken(userId: string, username: string): string {
+  const expiresAt = Date.now() + 1000 * 60 * 60 * 24 * 7; // 7 days expiration
+  const data = `${userId}:${username}:${expiresAt}`;
+  const signature = crypto.createHmac("sha256", JWT_SECRET).update(data).digest("hex");
+  return `${Buffer.from(data).toString("base64")}.${signature}`;
+}
+
+function verifyStatelessToken(token: string): { userId: string; username: string } | null {
+  try {
+    const [payloadBase64, signature] = token.split(".");
+    if (!payloadBase64 || !signature) return null;
+    const data = Buffer.from(payloadBase64, "base64").toString("utf-8");
+    const [userId, username, expiresAtStr] = data.split(":");
+    if (!userId || !username || !expiresAtStr) return null;
+
+    const expiresAt = parseInt(expiresAtStr, 10);
+    if (expiresAt < Date.now()) return null; // Token expired
+
+    const expectedSignature = crypto.createHmac("sha256", JWT_SECRET).update(data).digest("hex");
+    if (signature !== expectedSignature) return null; // Signature didn't match
+
+    return { userId, username };
+  } catch (e) {
+    return null;
+  }
 }
 
 // Authentication middleware
@@ -176,14 +201,26 @@ function authenticateToken(req: any, res: any, next: any) {
     return res.status(401).json({ error: "Access token required" });
   }
 
+  // 1. Try checking sessions store (Legacy/Cache)
+  let userPayload: { id: string; username: string } | null = null;
   const sessions = readSessions();
   const session = sessions[token];
 
-  if (!session || session.expiresAt < Date.now()) {
+  if (session && session.expiresAt >= Date.now()) {
+    userPayload = { id: session.userId, username: session.username };
+  } else {
+    // 2. Fallback to stateless JWT token signature check
+    const verified = verifyStatelessToken(token);
+    if (verified) {
+      userPayload = { id: verified.userId, username: verified.username };
+    }
+  }
+
+  if (!userPayload) {
     return res.status(401).json({ error: "Session invalid or expired" });
   }
 
-  req.user = { id: session.userId, username: session.username };
+  req.user = userPayload;
   next();
 }
 
@@ -195,6 +232,43 @@ async function startServer() {
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
 
   // ==================== AUTHENTICATION API ROUTES ====================
+
+  // POST: Sync user accounts database from client localStorage (Serverless Auto-Recovery)
+  app.post("/api/auth/sync", (req, res) => {
+    try {
+      const { users: localUsers } = req.body;
+      if (!Array.isArray(localUsers)) {
+        return res.status(400).json({ error: "Invalid sync request format" });
+      }
+
+      const currentUsers = readUsers();
+      let updatedCount = 0;
+
+      for (const u of localUsers) {
+        if (!u.username || !u.id || !u.passwordHash || !u.salt) continue;
+        const normalized = u.username.trim().toLowerCase();
+        const exists = currentUsers.some((curr: any) => curr.username === normalized || curr.id === u.id);
+        if (!exists) {
+          currentUsers.push({
+            id: u.id,
+            username: normalized,
+            passwordHash: u.passwordHash,
+            salt: u.salt,
+            createdAt: u.createdAt || new Date().toISOString()
+          });
+          updatedCount++;
+        }
+      }
+
+      if (updatedCount > 0) {
+        writeUsers(currentUsers);
+      }
+
+      res.json({ success: true, syncedUsersCount: updatedCount });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message || "Failed to sync user accounts" });
+    }
+  });
 
   // POST: Sign Up
   app.post("/api/auth/signup", (req, res) => {
@@ -220,7 +294,9 @@ async function startServer() {
 
       const salt = generateSalt();
       const passwordHash = hashPassword(password, salt);
-      const userId = `user-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+      
+      // Deterministic userId ensures local browser caching is 100% resilient to server container deletions
+      const userId = `user-${trimmedUser}`;
 
       const newUser = {
         id: userId,
@@ -233,8 +309,22 @@ async function startServer() {
       users.push(newUser);
       writeUsers(users);
 
+      // One-time pre-load seed entries for this brand new user inside the backend logs storage!
+      try {
+        const logs = readLogs();
+        const userSeeds = SEED_ENTRIES.map((entry) => ({
+          ...entry,
+          id: `trade-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
+          ownerId: userId
+        }));
+        const updatedLogs = [...userSeeds, ...logs];
+        writeLogs(updatedLogs);
+      } catch (seedErr) {
+        console.error("Failed to seed initial user logs on signup", seedErr);
+      }
+
       // Create session
-      const token = generateToken();
+      const token = generateToken(userId, trimmedUser);
       const sessions = readSessions();
       sessions[token] = {
         userId,
@@ -245,7 +335,8 @@ async function startServer() {
 
       res.status(201).json({
         token,
-        user: { id: userId, username: trimmedUser }
+        user: { id: userId, username: trimmedUser },
+        syncPayload: { id: userId, username: trimmedUser, passwordHash, salt, createdAt: newUser.createdAt }
       });
     } catch (e: any) {
       res.status(500).json({ error: e.message || "Failed to complete sign up" });
@@ -262,7 +353,7 @@ async function startServer() {
 
       const trimmedUser = username.trim().toLowerCase();
       const users = readUsers();
-      const user = users.find((u: any) => u.username === trimmedUser);
+      let user = users.find((u: any) => u.username === trimmedUser);
 
       if (!user) {
         return res.status(401).json({ error: "Invalid username or password" });
@@ -273,8 +364,8 @@ async function startServer() {
         return res.status(401).json({ error: "Invalid username or password" });
       }
 
-      // Generate session token
-      const token = generateToken();
+      // Generate stateless token
+      const token = generateToken(user.id, user.username);
       const sessions = readSessions();
       sessions[token] = {
         userId: user.id,
@@ -301,15 +392,27 @@ async function startServer() {
       return res.status(401).json({ error: "Unauthorized" });
     }
 
+    // 1. Check sessions
+    let userPayload: { id: string; username: string } | null = null;
     const sessions = readSessions();
     const session = sessions[token];
 
-    if (!session || session.expiresAt < Date.now()) {
+    if (session && session.expiresAt >= Date.now()) {
+      userPayload = { id: session.userId, username: session.username };
+    } else {
+      // 2. Fallback to stateless JWT-style verification
+      const verified = verifyStatelessToken(token);
+      if (verified) {
+        userPayload = { id: verified.userId, username: verified.username };
+      }
+    }
+
+    if (!userPayload) {
       return res.status(401).json({ error: "Session invalid or expired" });
     }
 
     res.json({
-      user: { id: session.userId, username: session.username }
+      user: userPayload
     });
   });
 
@@ -330,24 +433,40 @@ async function startServer() {
 
   // ==================== LOGS API ROUTES (SCOPED TO AUTHENTICATED USER) ====================
 
+  // POST: Sync/Restore entire categories of logs from the client's localStorage (Serverless Auto-Recovery)
+  app.post("/api/logs/sync", authenticateToken, (req: any, res) => {
+    try {
+      const { logs: clientLogs } = req.body;
+      if (!Array.isArray(clientLogs)) {
+        return res.status(400).json({ error: "Invalid logs sync request format" });
+      }
+
+      const serverLogs = readLogs();
+      
+      // Filter out existing server logs belonging to the current user
+      const otherUsersLogs = serverLogs.filter((item: any) => item.ownerId !== req.user.id);
+
+      // Enforce correct ownerId of the current user on all incoming logs to make it safe
+      const verifiedClientLogs = clientLogs.map((item: any) => ({
+        ...item,
+        ownerId: req.user.id
+      }));
+
+      // Recombine and write
+      const combined = [...verifiedClientLogs, ...otherUsersLogs];
+      writeLogs(combined);
+
+      res.json({ success: true, syncedLogsCount: verifiedClientLogs.length });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message || "Failed to sync trade logs" });
+    }
+  });
+
   // API logs retrieval
   app.get("/api/logs", authenticateToken, (req: any, res) => {
     try {
       const logs = readLogs();
-      let userLogs = logs.filter((log: any) => log.ownerId === req.user.id);
-
-      // If user has no logs, copy seed entries so they have pre-loaded default data in their personal journal!
-      if (userLogs.length === 0) {
-        const userSeeds = SEED_ENTRIES.map((entry) => ({
-          ...entry,
-          id: `trade-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
-          ownerId: req.user.id
-        }));
-        const updated = [...userSeeds, ...logs];
-        writeLogs(updated);
-        userLogs = userSeeds;
-      }
-
+      const userLogs = logs.filter((log: any) => log.ownerId === req.user.id);
       res.json(userLogs);
     } catch (e: any) {
       res.status(500).json({ error: e.message || "Failed to read logs" });
