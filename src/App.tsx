@@ -5,13 +5,14 @@
 
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { TradeEntry } from './types';
+import { TradeEntry, CapitalEntry } from './types';
 import StatsDashboard from './components/StatsDashboard';
 import AnalyticsCharts from './components/AnalyticsCharts';
 import TradeForm from './components/TradeForm';
 import TradeGrid from './components/TradeGrid';
 import TradeDetailModal from './components/TradeDetailModal';
 import AuthScreen from './components/AuthScreen';
+import CapitalManager from './components/CapitalManager';
 import {
   TrendingUp,
   TrendingDown,
@@ -23,7 +24,9 @@ import {
   AlertCircle,
   CheckSquare,
   LogOut,
-  User
+  User,
+  Sun,
+  Moon
 } from 'lucide-react';
 
 const LOCAL_STORAGE_KEY = 'trades_desk_db_v2';
@@ -107,6 +110,20 @@ const SEED_ENTRIES: TradeEntry[] = [
 ];
 
 export default function App() {
+  const [theme, setTheme] = useState<'dark' | 'light'>(() => {
+    return (localStorage.getItem('trades_desk_theme') as 'dark' | 'light') || 'dark';
+  });
+
+  useEffect(() => {
+    const root = document.documentElement;
+    if (theme === 'light') {
+      root.classList.add('light-mode');
+    } else {
+      root.classList.remove('light-mode');
+    }
+    localStorage.setItem('trades_desk_theme', theme);
+  }, [theme]);
+
   const [token, setToken] = useState<string | null>(() => localStorage.getItem('trades_desk_token_v2'));
   const [user, setUser] = useState<{ id: string; username: string } | null>(() => {
     const saved = localStorage.getItem('trades_desk_user_v2');
@@ -121,6 +138,60 @@ export default function App() {
   });
 
   const [entries, setEntries] = useState<TradeEntry[]>([]);
+  const [capitalEntries, setCapitalEntries] = useState<CapitalEntry[]>([]);
+  const [isCapitalOpen, setIsCapitalOpen] = useState(false);
+
+  // Load and cache Capital entries from local safety backup
+  useEffect(() => {
+    if (user?.id) {
+      const saved = localStorage.getItem(`trades_desk_capital_v2_${user.id}`);
+      if (saved) {
+        try {
+          setCapitalEntries(JSON.parse(saved));
+        } catch {
+          setCapitalEntries([]);
+        }
+      } else {
+        const defaultFunding: CapitalEntry[] = [
+          {
+            id: 'cap-initial-funding',
+            amount: 50000.00,
+            type: 'starting',
+            date: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+            notes: 'Sandbox Portfolio Initial Funding Balance'
+          }
+        ];
+        setCapitalEntries(defaultFunding);
+        localStorage.setItem(`trades_desk_capital_v2_${user.id}`, JSON.stringify(defaultFunding));
+      }
+    } else {
+      setCapitalEntries([]);
+    }
+  }, [user]);
+
+  const handleSaveCapital = (capitalData: Omit<CapitalEntry, 'id'> & { id?: string }) => {
+    if (!user?.id) return;
+    const isEditing = !!capitalData.id;
+    const targetId = capitalData.id;
+
+    let updatedList: CapitalEntry[];
+    if (isEditing) {
+      updatedList = capitalEntries.map((e) => e.id === targetId ? { ...e, ...capitalData } : e);
+    } else {
+      const nextId = `cap-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+      updatedList = [{ ...capitalData, id: nextId } as CapitalEntry, ...capitalEntries];
+    }
+    setCapitalEntries(updatedList);
+    localStorage.setItem(`trades_desk_capital_v2_${user.id}`, JSON.stringify(updatedList));
+  };
+
+  const handleDeleteCapital = (id: string) => {
+    if (!user?.id) return;
+    const updated = capitalEntries.filter((e) => e.id !== id);
+    setCapitalEntries(updated);
+    localStorage.setItem(`trades_desk_capital_v2_${user.id}`, JSON.stringify(updated));
+  };
+
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingEntry, setEditingEntry] = useState<TradeEntry | null>(null);
   const [selectedEntry, setSelectedEntry] = useState<TradeEntry | null>(null);
@@ -428,8 +499,10 @@ export default function App() {
       console.error('Reset database API error', e);
     }
     setEntries([]);
+    setCapitalEntries([]);
     if (user?.id) {
       localStorage.setItem(`${LOCAL_STORAGE_KEY}_${user.id}`, JSON.stringify([]));
+      localStorage.setItem(`trades_desk_capital_v2_${user.id}`, JSON.stringify([]));
       // Mark existing entries as deleted locally to prevent background restauration
       try {
         const delKey = `trades_desk_deleted_v2_${user.id}`;
@@ -474,6 +547,17 @@ export default function App() {
 
         {/* Navigation CTAs */}
         <div className="flex items-center gap-3 sm:gap-4">
+          {/* Theme switcher */}
+          <button
+            type="button"
+            onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+            title={theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+            className="p-2.5 bg-slate-950/40 hover:bg-slate-950/60 border border-geo-border hover:border-slate-500/30 text-slate-400 hover:text-slate-200 h-9 w-9 rounded-sm transition-all cursor-pointer flex items-center justify-center text-slate-500 hover:text-slate-350"
+            id="header-cta-theme"
+          >
+            {theme === 'dark' ? <Sun size={14} /> : <Moon size={14} />}
+          </button>
+
           {/* User badge */}
           <div className="flex items-center gap-2 text-[10.5px] text-slate-300 bg-slate-950/40 border border-geo-border px-3 h-9 rounded-sm font-mono uppercase tracking-wider select-none">
             <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse flex-shrink-0" />
@@ -529,7 +613,11 @@ export default function App() {
             )}
           </div>
 
-          <StatsDashboard entries={entries} />
+          <StatsDashboard
+            entries={entries}
+            capitalEntries={capitalEntries}
+            onManageCapital={() => setIsCapitalOpen(true)}
+          />
 
           {/* Graphical Analytics Layout */}
           <AnalyticsCharts entries={entries} />
@@ -573,6 +661,19 @@ export default function App() {
             }}
             onSave={handleSaveEntry}
             initialEntry={editingEntry}
+          />
+        )}
+      </AnimatePresence>
+
+      {/* Capital Ledger Flow Management Overlay */}
+      <AnimatePresence>
+        {isCapitalOpen && (
+          <CapitalManager
+            isOpen={isCapitalOpen}
+            onClose={() => setIsCapitalOpen(false)}
+            capitalEntries={capitalEntries}
+            onSaveCapital={handleSaveCapital}
+            onDeleteCapital={handleDeleteCapital}
           />
         )}
       </AnimatePresence>
