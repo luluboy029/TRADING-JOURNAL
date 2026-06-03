@@ -23,9 +23,7 @@ import {
   AlertCircle,
   CheckSquare,
   LogOut,
-  User,
-  Sun,
-  Moon
+  User
 } from 'lucide-react';
 
 const LOCAL_STORAGE_KEY = 'trades_desk_db_v2';
@@ -109,20 +107,6 @@ const SEED_ENTRIES: TradeEntry[] = [
 ];
 
 export default function App() {
-  const [theme, setTheme] = useState<'dark' | 'light'>(() => {
-    return (localStorage.getItem('trades_desk_theme') as 'dark' | 'light') || 'dark';
-  });
-
-  useEffect(() => {
-    const root = document.documentElement;
-    if (theme === 'light') {
-      root.classList.add('light-mode');
-    } else {
-      root.classList.remove('light-mode');
-    }
-    localStorage.setItem('trades_desk_theme', theme);
-  }, [theme]);
-
   const [token, setToken] = useState<string | null>(() => localStorage.getItem('trades_desk_token_v2'));
   const [user, setUser] = useState<{ id: string; username: string } | null>(() => {
     const saved = localStorage.getItem('trades_desk_user_v2');
@@ -182,9 +166,8 @@ export default function App() {
   };
 
   // Load initially from full-stack Express API
-  const fetchEntries = async (currentToken: string | null, currentUser?: typeof user) => {
-    const activeUser = currentUser || user;
-    if (!currentToken || !activeUser) return;
+  const fetchEntries = async (currentToken: string | null) => {
+    if (!currentToken) return;
     setIsLoading(true);
     setApiError(null);
     try {
@@ -201,57 +184,12 @@ export default function App() {
         throw new Error('API server returned response error');
       }
       const data = await res.json();
-
-      // Ephemeral Database Protection: check if client has local records missing on temporary server
-      const localKey = `${LOCAL_STORAGE_KEY}_${activeUser.id}`;
-      const rawLocal = localStorage.getItem(localKey);
-      
-      let localLogs = [];
-      if (rawLocal) {
-        try {
-          localLogs = JSON.parse(rawLocal);
-        } catch (parseError) {
-          console.warn('Error reading parsing local logs for sync check', parseError);
-        }
-      }
-
-      if (Array.isArray(localLogs) && localLogs.length > 0) {
-        const serverIds = new Set(data.map((item: any) => item.id));
-        const deletedIds = new Set<string>(JSON.parse(localStorage.getItem(`trades_desk_deleted_v2_${activeUser.id}`) || '[]'));
-        
-        const missingOnServer = localLogs.filter((item: any) => item.id && !serverIds.has(item.id) && !deletedIds.has(item.id));
-
-        if (missingOnServer.length > 0) {
-          console.log('Restoring journal/trade history logs back to server container on the fly', missingOnServer);
-          try {
-            const syncRes = await fetch('/api/logs/sync', {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${currentToken}`
-              },
-              body: JSON.stringify({ logs: [...data, ...missingOnServer] })
-            });
-
-            if (syncRes.ok) {
-              const combinedLogs = [...data, ...missingOnServer];
-              setEntries(combinedLogs);
-              localStorage.setItem(localKey, JSON.stringify(combinedLogs));
-              setIsLoading(false);
-              return;
-            }
-          } catch (syncErr) {
-            console.warn('Silent background log restoration failed', syncErr);
-          }
-        }
-      }
-
       setEntries(data);
-      localStorage.setItem(localKey, JSON.stringify(data));
+      localStorage.setItem(`${LOCAL_STORAGE_KEY}_${user?.id || 'guest'}`, JSON.stringify(data));
     } catch (e: any) {
       console.warn('Backend connection unavailable, falling back to local storage cache', e);
       setApiError('Connected in Offline Mode');
-      const stored = localStorage.getItem(`${LOCAL_STORAGE_KEY}_${activeUser.id}`);
+      const stored = localStorage.getItem(`${LOCAL_STORAGE_KEY}_${user?.id || 'guest'}`);
       if (stored) {
         try {
           setEntries(JSON.parse(stored));
@@ -267,24 +205,7 @@ export default function App() {
   };
 
   useEffect(() => {
-    const syncBackupUsersOnStartup = async () => {
-      try {
-        const rawBackup = localStorage.getItem('trades_desk_users_backup');
-        const backupUsers = rawBackup ? JSON.parse(rawBackup) : [];
-        if (Array.isArray(backupUsers) && backupUsers.length > 0) {
-          await fetch('/api/auth/sync', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ users: backupUsers })
-          });
-        }
-      } catch (e) {
-        console.warn('Failed to auto-sync backup users on startup', e);
-      }
-    };
-
     const verifyToken = async () => {
-      await syncBackupUsersOnStartup();
       const savedToken = localStorage.getItem('trades_desk_token_v2');
       if (savedToken) {
         try {
@@ -295,7 +216,6 @@ export default function App() {
             const data = await res.json();
             setToken(savedToken);
             setUser(data.user);
-            fetchEntries(savedToken, data.user);
           } else {
             handleLogout();
             setIsLoading(false);
@@ -313,10 +233,10 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (token && user) {
-      fetchEntries(token, user);
+    if (token) {
+      fetchEntries(token);
     }
-  }, [token, user]);
+  }, [token]);
 
   const handleAuthSuccess = (newToken: string, authenticatedUser: { id: string; username: string }) => {
     localStorage.setItem('trades_desk_token_v2', newToken);
@@ -380,19 +300,6 @@ export default function App() {
   };
 
   const handleDeleteEntry = async (id: string) => {
-    if (user?.id) {
-      try {
-        const delKey = `trades_desk_deleted_v2_${user.id}`;
-        const deletedIds = JSON.parse(localStorage.getItem(delKey) || '[]');
-        if (!deletedIds.includes(id)) {
-          deletedIds.push(id);
-          localStorage.setItem(delKey, JSON.stringify(deletedIds));
-        }
-      } catch (e) {
-        console.warn('Failed tracking local deletion id list', e);
-      }
-    }
-
     try {
       const res = await fetch(`/api/logs/${id}`, {
         method: 'DELETE',
@@ -407,9 +314,7 @@ export default function App() {
 
     const updated = entries.filter((e) => e.id !== id);
     setEntries(updated);
-    if (user?.id) {
-      localStorage.setItem(`${LOCAL_STORAGE_KEY}_${user.id}`, JSON.stringify(updated));
-    }
+    localStorage.setItem(`${LOCAL_STORAGE_KEY}_${user?.id}`, JSON.stringify(updated));
 
     if (selectedEntry?.id === id) {
       setSelectedEntry(null);
@@ -444,17 +349,7 @@ export default function App() {
       console.error('Reset database API error', e);
     }
     setEntries([]);
-    if (user?.id) {
-      localStorage.setItem(`${LOCAL_STORAGE_KEY}_${user.id}`, JSON.stringify([]));
-      // Mark existing entries as deleted locally to prevent background restauration
-      try {
-        const delKey = `trades_desk_deleted_v2_${user.id}`;
-        const deletedIds = entries.map(e => e.id).filter(Boolean);
-        localStorage.setItem(delKey, JSON.stringify(deletedIds));
-      } catch (e) {
-        console.warn('Failed setting reset deleted list', e);
-      }
-    }
+    localStorage.setItem(`${LOCAL_STORAGE_KEY}_${user?.id}`, JSON.stringify([]));
     setIsClearingAll(false);
   };
 
@@ -490,17 +385,6 @@ export default function App() {
 
         {/* Navigation CTAs */}
         <div className="flex items-center gap-3 sm:gap-4">
-          {/* Theme switcher */}
-          <button
-            type="button"
-            onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
-            title={theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
-            className="p-2.5 bg-slate-950/40 hover:bg-slate-950/60 border border-geo-border hover:border-slate-500/30 text-slate-400 hover:text-slate-200 h-9 w-9 rounded-sm transition-all cursor-pointer flex items-center justify-center text-slate-500 hover:text-slate-350"
-            id="header-cta-theme"
-          >
-            {theme === 'dark' ? <Sun size={14} /> : <Moon size={14} />}
-          </button>
-
           {/* User badge */}
           <div className="flex items-center gap-2 text-[10.5px] text-slate-300 bg-slate-950/40 border border-geo-border px-3 h-9 rounded-sm font-mono uppercase tracking-wider select-none">
             <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse flex-shrink-0" />

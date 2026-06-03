@@ -236,43 +236,6 @@ function authenticateToken(req: any, res: any, next: any) {
 
 // ==================== AUTHENTICATION API ROUTES ====================
 
-// POST: Sync user accounts database from client localStorage (Serverless Auto-Recovery)
-app.post("/api/auth/sync", (req, res) => {
-  try {
-    const { users: localUsers } = req.body;
-    if (!Array.isArray(localUsers)) {
-      return res.status(400).json({ error: "Invalid sync request format" });
-    }
-
-    const currentUsers = readUsers();
-    let updatedCount = 0;
-
-    for (const u of localUsers) {
-      if (!u.username || !u.id || !u.passwordHash || !u.salt) continue;
-      const normalized = u.username.trim().toLowerCase();
-      const exists = currentUsers.some((curr: any) => curr.username === normalized || curr.id === u.id);
-      if (!exists) {
-        currentUsers.push({
-          id: u.id,
-          username: normalized,
-          passwordHash: u.passwordHash,
-          salt: u.salt,
-          createdAt: u.createdAt || new Date().toISOString()
-        });
-        updatedCount++;
-      }
-    }
-
-    if (updatedCount > 0) {
-      writeUsers(currentUsers);
-    }
-
-    res.json({ success: true, syncedUsersCount: updatedCount });
-  } catch (e: any) {
-    res.status(500).json({ error: e.message || "Failed to sync user accounts" });
-  }
-});
-
 // POST: Sign Up
 app.post("/api/auth/signup", (req, res) => {
   try {
@@ -312,20 +275,6 @@ app.post("/api/auth/signup", (req, res) => {
     users.push(newUser);
     writeUsers(users);
 
-    // One-time pre-load seed entries for this brand new user inside the backend logs storage!
-    try {
-      const logs = readLogs();
-      const userSeeds = SEED_ENTRIES.map((entry) => ({
-        ...entry,
-        id: `trade-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
-        ownerId: userId
-      }));
-      const updatedLogs = [...userSeeds, ...logs];
-      writeLogs(updatedLogs);
-    } catch (seedErr) {
-      console.error("Failed to seed initial user logs on signup", seedErr);
-    }
-
     // Create session
     const token = generateToken(userId, trimmedUser);
     const sessions = readSessions();
@@ -338,8 +287,7 @@ app.post("/api/auth/signup", (req, res) => {
 
     res.status(201).json({
       token,
-      user: { id: userId, username: trimmedUser },
-      syncPayload: { id: userId, username: trimmedUser, passwordHash, salt, createdAt: newUser.createdAt }
+      user: { id: userId, username: trimmedUser }
     });
   } catch (e: any) {
     res.status(500).json({ error: e.message || "Failed to complete sign up" });
@@ -382,8 +330,7 @@ app.post("/api/auth/login", (req, res) => {
 
     res.json({
       token,
-      user: { id: user.id, username: user.username },
-      syncPayload: { id: user.id, username: user.username, passwordHash: user.passwordHash, salt: user.salt, createdAt: user.createdAt }
+      user: { id: user.id, username: user.username }
     });
   } catch (e: any) {
     res.status(500).json({ error: e.message || "Failed to sign in" });
@@ -440,40 +387,24 @@ app.post("/api/auth/logout", (req, res) => {
 
 // ==================== LOGS API ROUTES (SCOPED TO AUTHENTICATED USER) ====================
 
-// POST: Sync/Restore entire categories of logs from the client's localStorage (Serverless Auto-Recovery)
-app.post("/api/logs/sync", authenticateToken, (req: any, res) => {
-  try {
-    const { logs: clientLogs } = req.body;
-    if (!Array.isArray(clientLogs)) {
-      return res.status(400).json({ error: "Invalid logs sync request format" });
-    }
-
-    const serverLogs = readLogs();
-    
-    // Filter out existing server logs belonging to the current user
-    const otherUsersLogs = serverLogs.filter((item: any) => item.ownerId !== req.user.id);
-
-    // Enforce correct ownerId of the current user on all incoming logs to make it safe
-    const verifiedClientLogs = clientLogs.map((item: any) => ({
-      ...item,
-      ownerId: req.user.id
-    }));
-
-    // Recombine and write
-    const combined = [...verifiedClientLogs, ...otherUsersLogs];
-    writeLogs(combined);
-
-    res.json({ success: true, syncedLogsCount: verifiedClientLogs.length });
-  } catch (e: any) {
-    res.status(500).json({ error: e.message || "Failed to sync trade logs" });
-  }
-});
-
 // API logs retrieval
 app.get("/api/logs", authenticateToken, (req: any, res) => {
   try {
     const logs = readLogs();
-    const userLogs = logs.filter((log: any) => log.ownerId === req.user.id);
+    let userLogs = logs.filter((log: any) => log.ownerId === req.user.id);
+
+    // If user has no logs, copy seed entries so they have pre-loaded default data in their personal journal!
+    if (userLogs.length === 0) {
+      const userSeeds = SEED_ENTRIES.map((entry) => ({
+        ...entry,
+        id: `trade-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
+        ownerId: req.user.id
+      }));
+      const updated = [...userSeeds, ...logs];
+      writeLogs(updated);
+      userLogs = userSeeds;
+    }
+
     res.json(userLogs);
   } catch (e: any) {
     res.status(500).json({ error: e.message || "Failed to read logs" });
