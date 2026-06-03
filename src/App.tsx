@@ -11,6 +11,7 @@ import AnalyticsCharts from './components/AnalyticsCharts';
 import TradeForm from './components/TradeForm';
 import TradeGrid from './components/TradeGrid';
 import TradeDetailModal from './components/TradeDetailModal';
+import AuthScreen from './components/AuthScreen';
 import {
   TrendingUp,
   TrendingDown,
@@ -20,7 +21,9 @@ import {
   Sparkles,
   Database,
   AlertCircle,
-  CheckSquare
+  CheckSquare,
+  LogOut,
+  User
 } from 'lucide-react';
 
 const LOCAL_STORAGE_KEY = 'trades_desk_db_v2';
@@ -104,6 +107,19 @@ const SEED_ENTRIES: TradeEntry[] = [
 ];
 
 export default function App() {
+  const [token, setToken] = useState<string | null>(() => localStorage.getItem('trades_desk_token_v2'));
+  const [user, setUser] = useState<{ id: string; username: string } | null>(() => {
+    const saved = localStorage.getItem('trades_desk_user_v2');
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  });
+
   const [entries, setEntries] = useState<TradeEntry[]>([]);
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingEntry, setEditingEntry] = useState<TradeEntry | null>(null);
@@ -128,28 +144,60 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(true);
   const [apiError, setApiError] = useState<string | null>(null);
 
+  const handleLogout = async () => {
+    const currentToken = token || localStorage.getItem('trades_desk_token_v2');
+    if (currentToken) {
+      try {
+        await fetch('/api/auth/logout', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${currentToken}`
+          }
+        });
+      } catch (e) {
+        console.error('Logout notify failed', e);
+      }
+    }
+    localStorage.removeItem('trades_desk_token_v2');
+    localStorage.removeItem('trades_desk_user_v2');
+    setToken(null);
+    setUser(null);
+    setEntries([]);
+  };
+
   // Load initially from full-stack Express API
-  const fetchEntries = async () => {
+  const fetchEntries = async (currentToken: string | null) => {
+    if (!currentToken) return;
     setIsLoading(true);
     setApiError(null);
     try {
-      const res = await fetch('/api/logs');
-      if (!res.ok) throw new Error('API server returned response error');
+      const res = await fetch('/api/logs', {
+        headers: {
+          'Authorization': `Bearer ${currentToken}`
+        }
+      });
+      if (!res.ok) {
+        if (res.status === 401) {
+          handleLogout();
+          return;
+        }
+        throw new Error('API server returned response error');
+      }
       const data = await res.json();
       setEntries(data);
-      localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(data));
+      localStorage.setItem(`${LOCAL_STORAGE_KEY}_${user?.id || 'guest'}`, JSON.stringify(data));
     } catch (e: any) {
       console.warn('Backend connection unavailable, falling back to local storage cache', e);
       setApiError('Connected in Offline Mode');
-      const stored = localStorage.getItem(LOCAL_STORAGE_KEY);
+      const stored = localStorage.getItem(`${LOCAL_STORAGE_KEY}_${user?.id || 'guest'}`);
       if (stored) {
         try {
           setEntries(JSON.parse(stored));
         } catch {
-          setEntries(SEED_ENTRIES);
+          setEntries([]);
         }
       } else {
-        setEntries(SEED_ENTRIES);
+        setEntries([]);
       }
     } finally {
       setIsLoading(false);
@@ -157,8 +205,44 @@ export default function App() {
   };
 
   useEffect(() => {
-    fetchEntries();
+    const verifyToken = async () => {
+      const savedToken = localStorage.getItem('trades_desk_token_v2');
+      if (savedToken) {
+        try {
+          const res = await fetch('/api/auth/me', {
+            headers: { 'Authorization': `Bearer ${savedToken}` }
+          });
+          if (res.ok) {
+            const data = await res.json();
+            setToken(savedToken);
+            setUser(data.user);
+          } else {
+            handleLogout();
+          }
+        } catch (e) {
+          console.warn('Authentication server offline. Trusting local verification cache.', e);
+          setIsLoading(false);
+        }
+      } else {
+        setIsLoading(false);
+      }
+    };
+
+    verifyToken();
   }, []);
+
+  useEffect(() => {
+    if (token) {
+      fetchEntries(token);
+    }
+  }, [token]);
+
+  const handleAuthSuccess = (newToken: string, authenticatedUser: { id: string; username: string }) => {
+    localStorage.setItem('trades_desk_token_v2', newToken);
+    localStorage.setItem('trades_desk_user_v2', JSON.stringify(authenticatedUser));
+    setToken(newToken);
+    setUser(authenticatedUser);
+  };
 
   const handleSaveEntry = async (entryData: Omit<TradeEntry, 'id'> & { id?: string }) => {
     const isEditing = !!entryData.id;
@@ -168,25 +252,31 @@ export default function App() {
       if (isEditing) {
         const res = await fetch(`/api/logs/${targetId}`, {
           method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+          },
           body: JSON.stringify(entryData)
         });
         if (!res.ok) throw new Error('Failed updating log on server');
         const updatedDoc = await res.json();
         const updatedList = entries.map((e) => (e.id === targetId ? updatedDoc : e));
         setEntries(updatedList);
-        localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(updatedList));
+        localStorage.setItem(`${LOCAL_STORAGE_KEY}_${user?.id}`, JSON.stringify(updatedList));
       } else {
         const res = await fetch('/api/logs', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+          },
           body: JSON.stringify(entryData)
         });
         if (!res.ok) throw new Error('Failed saving log to server');
         const savedDoc = await res.json();
         const updatedList = [savedDoc, ...entries];
         setEntries(updatedList);
-        localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(updatedList));
+        localStorage.setItem(`${LOCAL_STORAGE_KEY}_${user?.id}`, JSON.stringify(updatedList));
       }
     } catch (e) {
       console.error('Save API sync failed, falling back to localized container state', e);
@@ -201,7 +291,7 @@ export default function App() {
         : [savedEntry, ...entries];
 
       setEntries(updatedList);
-      localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(updatedList));
+      localStorage.setItem(`${LOCAL_STORAGE_KEY}_${user?.id}`, JSON.stringify(updatedList));
     }
 
     setIsFormOpen(false);
@@ -211,7 +301,10 @@ export default function App() {
   const handleDeleteEntry = async (id: string) => {
     try {
       const res = await fetch(`/api/logs/${id}`, {
-        method: 'DELETE'
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
       });
       if (!res.ok) throw new Error('Failed deleting log from server');
     } catch (e) {
@@ -220,7 +313,7 @@ export default function App() {
 
     const updated = entries.filter((e) => e.id !== id);
     setEntries(updated);
-    localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(updated));
+    localStorage.setItem(`${LOCAL_STORAGE_KEY}_${user?.id}`, JSON.stringify(updated));
 
     if (selectedEntry?.id === id) {
       setSelectedEntry(null);
@@ -245,16 +338,34 @@ export default function App() {
   const executeClearDatabase = async () => {
     try {
       const res = await fetch('/api/logs/reset', {
-        method: 'POST'
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
       });
       if (!res.ok) throw new Error('Failed clearing database from server');
     } catch (e) {
       console.error('Reset database API error', e);
     }
     setEntries([]);
-    localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify([]));
+    localStorage.setItem(`${LOCAL_STORAGE_KEY}_${user?.id}`, JSON.stringify([]));
     setIsClearingAll(false);
   };
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-geo-bg text-slate-100 flex items-center justify-center font-sans">
+        <div className="text-center space-y-4">
+          <div className="w-10 h-10 border-2 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto" />
+          <p className="text-[11px] font-mono text-slate-500 uppercase tracking-widest animate-pulse">Initializing LACC Trading Desk...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!user || !token) {
+    return <AuthScreen onAuthSuccess={handleAuthSuccess} />;
+  }
 
   return (
     <div className="min-h-screen bg-geo-bg text-slate-100 flex flex-col font-sans" id="trading-journal-app">
@@ -272,20 +383,36 @@ export default function App() {
         </div>
 
         {/* Navigation CTAs */}
-        <div className="flex items-center gap-4">
-          <div className="hidden md:flex items-center gap-1.5 text-[10px] text-slate-400 bg-geo-panel border border-geo-border px-3 py-1 rounded-sm font-mono uppercase tracking-wide">
-            <span className="w-1.5 h-1.5 bg-blue-500 animate-pulse" />
+        <div className="flex items-center gap-3 sm:gap-4">
+          {/* User badge */}
+          <div className="flex items-center gap-2 text-[10.5px] text-slate-300 bg-slate-950/40 border border-geo-border px-3 h-9 rounded-sm font-mono uppercase tracking-wider select-none">
+            <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse flex-shrink-0" />
+            <span className="text-slate-550 text-slate-500 font-bold hidden sm:inline">POS:</span>
+            <span className="text-slate-200 font-extrabold truncate max-w-[80px] sm:max-w-[120px]">{user.username}</span>
+          </div>
+
+          <div className="hidden lg:flex items-center gap-1.5 text-[10px] text-slate-400 bg-geo-panel border border-geo-border px-3 h-9 rounded-sm font-mono uppercase tracking-wide">
+            <span className="w-1.5 h-1.5 bg-blue-500 rounded-full animate-pulse" />
             <Clock size={11} className="ml-1 text-slate-500" />
             <span>Clock: {currentTime}</span>
           </div>
 
           <button
             onClick={handleAddInit}
-            className="flex items-center gap-1.5 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white font-bold font-mono uppercase tracking-wider px-4 h-9 rounded-sm transition-colors text-xs cursor-pointer"
+            className="flex items-center gap-1.5 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white font-bold font-mono uppercase tracking-wider px-3.5 h-9 rounded-sm transition-colors text-xs cursor-pointer"
             id="header-cta-add"
           >
             <Plus size={14} className="stroke-[3]" />
-            New log
+            <span className="hidden sm:inline">New log</span>
+          </button>
+
+          <button
+            onClick={handleLogout}
+            title="Secure Sign Out"
+            className="p-2.5 bg-slate-950/40 hover:bg-rose-950/45 border border-geo-border hover:border-rose-500/30 text-slate-400 hover:text-rose-450 h-9 rounded-sm transition-all cursor-pointer flex items-center justify-center text-slate-500 hover:text-rose-400"
+            id="header-cta-logout"
+          >
+            <LogOut size={14} />
           </button>
         </div>
       </header>
