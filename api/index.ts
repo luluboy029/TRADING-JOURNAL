@@ -111,17 +111,6 @@ const SEED_ENTRIES = [
 // Read/Write Logs helper
 function readLogs(): any[] {
   if (!fs.existsSync(DATA_FILE)) {
-    // Attempt to seed from standard pre-committed portfolio file if available in the bundle
-    const bundleFile = path.join(process.cwd(), "data", "logs.json");
-    if (fs.existsSync(bundleFile)) {
-      try {
-        const data = fs.readFileSync(bundleFile, "utf-8");
-        fs.writeFileSync(DATA_FILE, data, "utf-8");
-        return JSON.parse(data);
-      } catch (err) {
-        console.warn("Could not copy pre-committed logs seed to temporary partition", err);
-      }
-    }
     fs.writeFileSync(DATA_FILE, JSON.stringify([], null, 2), "utf-8");
     return [];
   }
@@ -141,17 +130,6 @@ function writeLogs(logs: any[]) {
 // Read/Write Users helper
 function readUsers(): any[] {
   if (!fs.existsSync(USERS_FILE)) {
-    // Attempt to seed from standard pre-committed users file if available in the bundle
-    const bundleFile = path.join(process.cwd(), "data", "users.json");
-    if (fs.existsSync(bundleFile)) {
-      try {
-        const data = fs.readFileSync(bundleFile, "utf-8");
-        fs.writeFileSync(USERS_FILE, data, "utf-8");
-        return JSON.parse(data);
-      } catch (err) {
-        console.warn("Could not copy pre-committed users seed to temporary partition", err);
-      }
-    }
     fs.writeFileSync(USERS_FILE, JSON.stringify([], null, 2), "utf-8");
     return [];
   }
@@ -171,17 +149,6 @@ function writeUsers(users: any[]) {
 // Read/Write Capital helper
 function readCapital(): any[] {
   if (!fs.existsSync(CAPITAL_FILE)) {
-    // Attempt to seed from standard pre-committed capital file if available in the bundle
-    const bundleFile = path.join(process.cwd(), "data", "capital.json");
-    if (fs.existsSync(bundleFile)) {
-      try {
-        const data = fs.readFileSync(bundleFile, "utf-8");
-        fs.writeFileSync(CAPITAL_FILE, data, "utf-8");
-        return JSON.parse(data);
-      } catch (err) {
-        console.warn("Could not copy pre-committed capital seed to temporary partition", err);
-      }
-    }
     fs.writeFileSync(CAPITAL_FILE, JSON.stringify([], null, 2), "utf-8");
     return [];
   }

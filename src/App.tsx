@@ -201,34 +201,6 @@ export default function App() {
         }
       }
 
-      // If both backend and local storage have no capital data, seed default starting capital
-      if (data.length === 0 && localCap.length === 0) {
-        const defaultFunding: CapitalEntry[] = [
-          {
-            id: 'cap-initial-funding',
-            amount: 50000.00,
-            type: 'starting',
-            date: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-            notes: 'Sandbox Portfolio Initial Funding Balance'
-          }
-        ];
-        try {
-          await fetch('/api/capital/sync', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${currentToken}`
-            },
-            body: JSON.stringify({ capital: defaultFunding })
-          });
-        } catch (syncErr) {
-          console.warn('Silent seeding of capital failed', syncErr);
-        }
-        setCapitalEntries(defaultFunding);
-        localStorage.setItem(localCapitalKey, JSON.stringify(defaultFunding));
-        return;
-      }
-
       setCapitalEntries(data);
       localStorage.setItem(localCapitalKey, JSON.stringify(data));
     } catch (e: any) {
@@ -469,6 +441,8 @@ export default function App() {
             const data = await res.json();
             setToken(savedToken);
             setUser(data.user);
+            fetchEntries(savedToken, data.user);
+            fetchCapital(savedToken, data.user);
           } else {
             handleLogout();
             setIsLoading(false);
