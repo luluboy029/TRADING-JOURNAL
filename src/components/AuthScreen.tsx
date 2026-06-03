@@ -4,7 +4,7 @@
  */
 
 import React, { useState } from 'react';
-import { BookMarked, Lock, User, AlertCircle, Sparkles, LogIn, UserPlus } from 'lucide-react';
+import { BookMarked, Lock, User, AlertCircle, Sparkles, LogIn, UserPlus, Eye, EyeOff } from 'lucide-react';
 import { motion } from 'motion/react';
 
 interface AuthScreenProps {
@@ -15,6 +15,7 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
   const [isLoginMode, setIsLoginMode] = useState<boolean>(true);
   const [username, setUsername] = useState<string>('');
   const [password, setPassword] = useState<string>('');
+  const [showPassword, setShowPassword] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(false);
 
@@ -96,7 +97,7 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
           <h2 className="text-xs font-bold font-display uppercase tracking-widest text-slate-200 border-b border-geo-border/60 pb-3 mb-5 flex items-center gap-1.5">
             {isLoginMode ? (
               <>
-                <LogIn size={13} className="text-blue-500" /> Sign In to Workspace
+                <LogIn size={13} className="text-blue-500" /> Sign In to my journal
               </>
             ) : (
               <>
@@ -130,14 +131,22 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
               </label>
               <div className="relative">
                 <input
-                  type="password"
+                  type={showPassword ? 'text' : 'password'}
                   required
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   disabled={isLoading}
                   placeholder="&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;"
-                  className="w-full bg-slate-950/50 border border-geo-border focus:border-blue-500 text-slate-100 placeholder-slate-600 text-xs py-2 px-3 focus:outline-none transition-colors font-mono h-10 rounded-xs"
+                  className="w-full bg-slate-950/50 border border-geo-border focus:border-blue-500 text-slate-100 placeholder-slate-600 text-xs py-2 pl-3 pr-10 focus:outline-none transition-colors font-mono h-10 rounded-xs"
                 />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-350 transition-colors cursor-pointer p-1 flex items-center justify-center"
+                  title={showPassword ? 'Hide password' : 'Show password'}
+                >
+                  {showPassword ? <EyeOff size={14} /> : <Eye size={14} />}
+                </button>
               </div>
             </div>
 
