@@ -21,6 +21,7 @@ const formatUSD = (val: number) => {
 };
 
 export default function AnalyticsCharts({ entries }: AnalyticsChartsProps) {
+  const [hoveredTrendIndex, setHoveredTrendIndex] = useState<number | null>(null);
   const [selectedMonth, setSelectedMonth] = useState<Date>(() => {
     if (entries.length > 0) {
       const sorted = [...entries].sort((a, b) => new Date(b.entryDate).getTime() - new Date(a.entryDate).getTime());
@@ -204,6 +205,90 @@ export default function AnalyticsCharts({ entries }: AnalyticsChartsProps) {
     }).sort((a, b) => b.net - a.net);
   }, [entries]);
 
+  // 5. Daily Net Trade P&L Trend over time
+  const dailyTrendData = useMemo(() => {
+    const dailyMap: Record<string, { date: string; pnl: number; count: number; wins: number }> = {};
+    
+    entries.forEach((e) => {
+      if (e.status === 'open') return;
+      const date = e.entryDate;
+      if (!date) return;
+      const net = (e.pnl || 0) - (e.fees || 0);
+
+      if (!dailyMap[date]) {
+        dailyMap[date] = { date, pnl: 0, count: 0, wins: 0 };
+      }
+      const dayData = dailyMap[date];
+      dayData.pnl += net;
+      dayData.count++;
+      if (e.status === 'win') {
+        dayData.wins++;
+      }
+    });
+
+    const sortedDays = Object.values(dailyMap).sort(
+      (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()
+    );
+
+    return sortedDays;
+  }, [entries]);
+
+  const trendMetrics = useMemo(() => {
+    if (dailyTrendData.length === 0) {
+      return { minPnl: 0, maxPnl: 100, points: [], zeroY: 75, yTicks: [0] };
+    }
+    const values = dailyTrendData.map((d) => d.pnl);
+    let minVal = Math.min(0, ...values);
+    let maxVal = Math.max(100, ...values);
+    
+    // Add 15% padding at top and bottom
+    const range = maxVal - minVal || 100;
+    const minPnl = minVal - range * 0.15;
+    const maxPnl = maxVal + range * 0.15;
+    const pnlRange = maxPnl - minPnl;
+
+    const paddingX = 35;
+    const paddingY = 20;
+    const chartW = 500;
+    const chartH = 150;
+
+    const zeroY = chartH - paddingY - ((0 - minPnl) / pnlRange) * (chartH - 2 * paddingY);
+    
+    const points = dailyTrendData.map((d, index) => {
+      const xRange = dailyTrendData.length > 1 ? dailyTrendData.length - 1 : 1;
+      const x = paddingX + (index / xRange) * (chartW - 2 * paddingX);
+      const y = chartH - paddingY - ((d.pnl - minPnl) / pnlRange) * (chartH - 2 * paddingY);
+      return { x, y, ...d };
+    });
+
+    // Make neat Y ticks
+    const yTicks = [minVal, 0, maxVal];
+
+    return { minPnl, maxPnl, points, zeroY, yTicks };
+  }, [dailyTrendData]);
+
+  const trendStats = useMemo(() => {
+    if (dailyTrendData.length === 0) {
+      return { avgPnl: 0, profitableDays: 0, totalDays: 0, winDayRate: 0, bestDay: 0, worstDay: 0 };
+    }
+    const profits = dailyTrendData.map(d => d.pnl);
+    const totalPnl = profits.reduce((sum, p) => sum + p, 0);
+    const avgPnl = totalPnl / dailyTrendData.length;
+    const greenDays = dailyTrendData.filter(d => d.pnl > 0).length;
+    const winDayRate = (greenDays / dailyTrendData.length) * 100;
+    const bestDay = Math.max(...profits);
+    const worstDay = Math.min(...profits);
+
+    return {
+      avgPnl,
+      profitableDays: greenDays,
+      totalDays: dailyTrendData.length,
+      winDayRate,
+      bestDay,
+      worstDay
+    };
+  }, [dailyTrendData]);
+
   // SVG dimensions for equity curve
   const width = 500;
   const height = 180;
@@ -372,51 +457,211 @@ export default function AnalyticsCharts({ entries }: AnalyticsChartsProps) {
         </div>
       </div>
 
-      {/* Chart 2: Asset Class Net Performance */}
+      {/* Chart 2: Daily P&L Trend Performance Chart */}
       <div className="bg-geo-panel border border-geo-border p-4 rounded-sm flex flex-col justify-between text-left">
         <div>
           <span className="text-[10px] font-mono font-bold tracking-widest text-slate-400 uppercase flex items-center gap-1.5">
-            <Layers size={12} className="text-blue-500" /> Sector Volume &amp; P&amp;L
+            <TrendingUp size={12} className="text-blue-500" /> Daily Trade P&amp;L Trend
           </span>
-          <p className="text-[9.5px] text-slate-500 font-mono mt-0.5">Asset class allocation performance metric ledger</p>
+          <p className="text-[9.5px] text-slate-500 font-mono mt-0.5">Chronological ledger trend of daily net profit and loss</p>
         </div>
 
-        <div className="my-4 space-y-2.5 overflow-y-auto max-h-[180px] flex-1">
-          {assetBreakdown.length === 0 ? (
-            <div className="text-center font-mono py-12 text-slate-550 text-[10px]">
-              No ledger points.
+        {/* The Graphic Element */}
+        <div className="my-3 flex-1 flex flex-col justify-center min-h-[170px] relative">
+          {dailyTrendData.length === 0 ? (
+            <div className="text-center font-mono py-12 text-slate-500 text-[10px]">
+              No closed trade history logs.
             </div>
           ) : (
-            assetBreakdown.map((row) => (
-              <div key={row.assetClass} className="space-y-1">
-                <div className="flex justify-between items-center text-[10px] font-mono">
-                  <span className="text-slate-355 text-slate-300 font-bold bg-slate-950/40 px-1.5 py-0.5 border border-slate-900 rounded-sm">
-                    {row.assetClass}
-                  </span>
-                  <span className={`font-bold ${row.net >= 0 ? 'text-emerald-400' : 'text-rose-455 text-rose-400'}`}>
-                    {row.net >= 0 ? '+' : ''}
-                    {formatUSD(row.net)}
-                  </span>
-                </div>
-                
-                {/* Custom layout progress bars */}
-                <div className="h-2 bg-slate-950/60 border border-slate-900 overflow-hidden relative">
-                  <div
-                    className={`h-full ${row.net >= 0 ? 'bg-emerald-500/30' : 'bg-rose-500/30'}`}
-                    style={{ width: `${Math.min(100, Math.max(10, (row.total / entries.length) * 100))}%` }}
+            <div className="space-y-3">
+              {/* SVG Trend Graph */}
+              <div className="relative bg-slate-950/40 border border-slate-900 rounded-sm p-1">
+                <svg viewBox="0 0 500 150" className="w-full h-auto overflow-visible select-none">
+                  {/* Grid Lines */}
+                  <line 
+                    x1="35" 
+                    y1={trendMetrics.zeroY} 
+                    x2="465" 
+                    y2={trendMetrics.zeroY} 
+                    className="stroke-slate-800" 
+                    strokeWidth="1"
+                    strokeDasharray="2,2"
                   />
-                  <span className="absolute inset-0 flex items-center justify-end pr-1.5 text-[7px] text-slate-550 font-mono">
-                    {row.total} trades &bull; {row.winRate.toFixed(0)}% Win
-                  </span>
-                </div>
+                  
+                  {/* Zero Line Marker Label */}
+                  <text 
+                    x="24" 
+                    y={trendMetrics.zeroY + 3} 
+                    className="fill-slate-650 font-mono text-[8px] text-slate-500 text-right font-semibold"
+                    textAnchor="end"
+                  >
+                    $0
+                  </text>
+
+                  {/* Gradient definition */}
+                  <defs>
+                    <linearGradient id="pnlGlowGrad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="#10b981" stopOpacity="0.25" />
+                      <stop offset="50%" stopColor="#10b981" stopOpacity="0.0" />
+                      <stop offset="100%" stopColor="#ef4444" stopOpacity="0.15" />
+                    </linearGradient>
+                  </defs>
+
+                  {/* Shaded Area fill under the curve */}
+                  {trendMetrics.points.length > 1 && (
+                    <path
+                      d={`
+                        M ${trendMetrics.points[0].x} ${trendMetrics.zeroY}
+                        ${trendMetrics.points.map(p => `L ${p.x} ${p.y}`).join(' ')}
+                        L ${trendMetrics.points[trendMetrics.points.length - 1].x} ${trendMetrics.zeroY}
+                        Z
+                      `}
+                      fill="url(#pnlGlowGrad)"
+                      className="opacity-40"
+                    />
+                  )}
+
+                  {/* Connecting Line */}
+                  {trendMetrics.points.length > 1 && (
+                    <path
+                      d={trendMetrics.points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`).join(' ')}
+                      fill="none"
+                      className="stroke-blue-500/70"
+                      strokeWidth="1.5"
+                    />
+                  )}
+
+                  {/* Zero Line horizontal dotted */}
+                  <line 
+                    x1="35" 
+                    y1="20" 
+                    x2="35" 
+                    y2="130" 
+                    className="stroke-slate-900" 
+                    strokeWidth="1"
+                  />
+
+                  {/* Bars at each point for Daily columns */}
+                  {trendMetrics.points.map((p, idx) => {
+                    const isHovered = hoveredTrendIndex === idx;
+                    const isPositive = p.pnl >= 0;
+                    
+                    // Draw columns
+                    const barW = Math.max(3, Math.min(14, (435 / dailyTrendData.length) * 0.4));
+                    const barH = Math.abs(p.y - trendMetrics.zeroY);
+                    const barY = isPositive ? p.y : trendMetrics.zeroY;
+
+                    return (
+                      <g key={`bar-gr-${idx}`}>
+                        <rect
+                          x={p.x - barW / 2}
+                          y={barY}
+                          width={barW}
+                          height={Math.max(2, barH)}
+                          className={`cursor-pointer transition-all ${
+                            isPositive 
+                              ? isHovered ? 'fill-emerald-400 stroke-emerald-300' : 'fill-emerald-500/35 stroke-emerald-500/70'
+                              : isHovered ? 'fill-rose-400 stroke-rose-300' : 'fill-rose-500/35 stroke-rose-500/70'
+                          }`}
+                          strokeWidth={isHovered ? 1.5 : 0.8}
+                          onMouseEnter={() => setHoveredTrendIndex(idx)}
+                          onMouseLeave={() => setHoveredTrendIndex(null)}
+                        />
+                        {/* Interactive Dot Anchors */}
+                        <circle
+                          cx={p.x}
+                          cy={p.y}
+                          r={isHovered ? 4.5 : 2.5}
+                          className={`cursor-pointer transition-all ${
+                            isPositive 
+                              ? 'fill-emerald-400 stroke-slate-950 stroke-2' 
+                              : 'fill-rose-400 stroke-slate-950 stroke-2'
+                          }`}
+                          onMouseEnter={() => setHoveredTrendIndex(idx)}
+                          onMouseLeave={() => setHoveredTrendIndex(null)}
+                        />
+                      </g>
+                    );
+                  })}
+                </svg>
+
+                {/* Floating tooltips inside coordinates */}
+                {hoveredTrendIndex !== null && trendMetrics.points[hoveredTrendIndex] && (
+                  <div className="absolute top-1.5 right-1.5 bg-slate-950/95 border border-slate-800/80 px-2 py-1 rounded-sm text-[8px] font-mono leading-tight shadow-md z-10">
+                    <span className="text-slate-450 block font-bold text-slate-400 uppercase">
+                      {new Date(trendMetrics.points[hoveredTrendIndex].date + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
+                    </span>
+                    <div className="flex gap-2 justify-between mt-1 text-slate-200">
+                      <span>Profit:</span>
+                      <span className={`font-bold ${trendMetrics.points[hoveredTrendIndex].pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                        {trendMetrics.points[hoveredTrendIndex].pnl >= 0 ? '+' : ''}
+                        {formatUSD(trendMetrics.points[hoveredTrendIndex].pnl)}
+                      </span>
+                    </div>
+                    <div className="flex gap-2 justify-between text-slate-400 mt-0.5">
+                      <span>Trades:</span>
+                      <span className="font-bold text-slate-200">{trendMetrics.points[hoveredTrendIndex].count}</span>
+                    </div>
+                    <div className="flex gap-2 justify-between text-slate-400 mt-0.5">
+                      <span>Win Rate:</span>
+                      <span className="font-bold text-slate-200">
+                        {((trendMetrics.points[hoveredTrendIndex].wins / trendMetrics.points[hoveredTrendIndex].count) * 100).toFixed(0)}%
+                      </span>
+                    </div>
+                  </div>
+                )}
               </div>
-            ))
+
+              {/* Day stats indicators or Hover info */}
+              <div className="bg-slate-950/30 border border-slate-900 rounded p-2 text-left space-y-1">
+                {hoveredTrendIndex === null ? (
+                  <div className="grid grid-cols-2 gap-x-3 gap-y-1.5 font-mono text-[9px]">
+                    <div className="flex justify-between border-b border-slate-900/60 pb-1">
+                      <span className="text-slate-500 uppercase">Daily Average:</span>
+                      <span className={`font-bold ${trendStats.avgPnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                        {trendStats.avgPnl >= 0 ? '+' : ''}{formatUSD(trendStats.avgPnl)}
+                      </span>
+                    </div>
+                    <div className="flex justify-between border-b border-slate-900/60 pb-1">
+                      <span className="text-slate-500 uppercase">Profitable Days:</span>
+                      <span className="font-bold text-emerald-400">
+                        {trendStats.profitableDays} / {trendStats.totalDays} ({trendStats.winDayRate.toFixed(0)}%)
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-500 uppercase">Best Day Yield:</span>
+                      <span className="font-bold text-emerald-400">+{formatUSD(trendStats.bestDay)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-500 uppercase">Worst Day Yield:</span>
+                      <span className="font-bold text-rose-400">{formatUSD(trendStats.worstDay)}</span>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="font-mono text-[9px] flex justify-between items-center h-[29.5px]">
+                    <div className="space-x-1 flex items-center">
+                      <span className="text-slate-400 font-bold bg-slate-900 px-1.5 py-0.5 border border-slate-950 rounded-sm">
+                        {trendMetrics.points[hoveredTrendIndex].date}
+                      </span>
+                      <span className="text-slate-550 text-slate-500">&bull; {trendMetrics.points[hoveredTrendIndex].count} trades</span>
+                    </div>
+                    <div>
+                      <span className="text-slate-500 uppercase mr-1">Daily Yield:</span>
+                      <span className={`font-bold text-[10px] ${trendMetrics.points[hoveredTrendIndex].pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                        {trendMetrics.points[hoveredTrendIndex].pnl >= 0 ? '+' : ''}
+                        {formatUSD(trendMetrics.points[hoveredTrendIndex].pnl)}
+                      </span>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
           )}
         </div>
 
-        <div className="text-[9px] font-mono text-slate-550 text-slate-500 uppercase tracking-widest flex justify-between border-t border-geo-border/40 pt-2 shrink-0">
-          <span>Active Asset Categories</span>
-          <span>{assetBreakdown.length} unique sectors</span>
+        <div className="text-[9px] font-mono text-slate-500 uppercase tracking-widest flex justify-between border-t border-geo-border/40 pt-2 shrink-0">
+          <span>Active Trading Sessions</span>
+          <span>{dailyTrendData.length} active days</span>
         </div>
       </div>
 
