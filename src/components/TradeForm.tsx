@@ -196,11 +196,11 @@ export default function TradeForm({ isOpen, onClose, onSave, initialEntry }: Tra
     if (status !== 'open') {
       const amt = Math.abs(quantity);
       if (status === 'win') {
-        calculatedPnl = amt;
+        calculatedPnl = amt + 2 * fees;
       } else if (status === 'loss') {
         calculatedPnl = -amt;
       } else if (status === 'breakeven') {
-        calculatedPnl = 0;
+        calculatedPnl = fees;
       }
     }
 

@@ -3,9 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { TradeEntry } from '../types';
-import { TrendingUp, Award, Layers, BarChart3, PieChart } from 'lucide-react';
+import { Calendar, ChevronLeft, ChevronRight, TrendingUp, Award, Layers, BarChart3, PieChart } from 'lucide-react';
 import { EMOTIONS_METADATA } from '../lib/emotions';
 
 interface AnalyticsChartsProps {
@@ -21,6 +21,70 @@ const formatUSD = (val: number) => {
 };
 
 export default function AnalyticsCharts({ entries }: AnalyticsChartsProps) {
+  const [selectedMonth, setSelectedMonth] = useState<Date>(() => {
+    if (entries.length > 0) {
+      const sorted = [...entries].sort((a, b) => new Date(b.entryDate).getTime() - new Date(a.entryDate).getTime());
+      // Safeguard date parsing
+      const latestDateStr = sorted[0].entryDate;
+      if (latestDateStr && latestDateStr.match(/^\d{4}-\d{2}-\d{2}$/)) {
+        return new Date(latestDateStr + 'T00:00:00');
+      }
+    }
+    return new Date();
+  });
+
+  const handlePrevMonth = () => {
+    setSelectedMonth(new Date(selectedMonth.getFullYear(), selectedMonth.getMonth() - 1, 1));
+  };
+
+  const handleNextMonth = () => {
+    setSelectedMonth(new Date(selectedMonth.getFullYear(), selectedMonth.getMonth() + 1, 1));
+  };
+
+  const formatCalendarUSD = (val: number) => {
+    const absVal = Math.round(Math.abs(val));
+    const sign = val < 0 ? '-' : val > 0 ? '+' : '';
+    if (absVal >= 1000) {
+      return `${sign}$${(absVal / 1000).toFixed(1)}K`;
+    }
+    return `${sign}$${absVal}`;
+  };
+
+  const monthlyStats = useMemo(() => {
+    const year = selectedMonth.getFullYear();
+    const month = selectedMonth.getMonth();
+    const monthPrefix = `${year}-${String(month + 1).padStart(2, '0')}`;
+    
+    // Filter trades that occurred within the selected month
+    const monthTrades = entries.filter(e => e.entryDate.startsWith(monthPrefix));
+    const closedTrades = monthTrades.filter(e => e.status !== 'open');
+    
+    let totalNet = 0;
+    let wins = 0;
+    let losses = 0;
+    let totalFees = 0;
+    
+    monthTrades.forEach(e => {
+      totalFees += e.fees || 0;
+      if (e.status !== 'open') {
+        const net = (e.pnl || 0) - (e.fees || 0);
+        totalNet += net;
+        if (e.status === 'win') wins++;
+        else if (e.status === 'loss') losses++;
+      }
+    });
+    
+    const winRate = closedTrades.length > 0 ? (wins / closedTrades.length) * 100 : 0;
+    
+    return {
+      totalNet,
+      tradeCount: monthTrades.length,
+      closedCount: closedTrades.length,
+      winRate,
+      totalFees
+    };
+  }, [entries, selectedMonth]);
+
   // 1. Cumulative Equity Curve Data
   const equityData = useMemo(() => {
     const sorted = [...entries]
@@ -173,137 +237,138 @@ export default function AnalyticsCharts({ entries }: AnalyticsChartsProps) {
     return [minVal, midVal, maxVal];
   }, [equityData]);
 
+  const year = selectedMonth.getFullYear();
+  const month = selectedMonth.getMonth();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const firstDayIndex = new Date(year, month, 1).getDay();
+
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-4" id="analytics-charts-row">
       
-      {/* Chart 1: Equity Curve (Pure responsive Custom SVG representation) */}
-      <div className="lg:col-span-2 bg-geo-panel border border-geo-border p-4 rounded-sm flex flex-col justify-between text-left">
+      {/* Chart 1: Trading Calendar Grid */}
+      <div className="lg:col-span-2 bg-geo-panel border border-geo-border p-4 rounded-sm flex flex-col justify-between text-left relative overflow-hidden">
         <div>
-          <span className="text-[10px] font-mono font-bold tracking-widest text-slate-400 uppercase flex items-center gap-1.5">
-            <TrendingUp size={12} className="text-blue-500" /> Real-time Equity Curve (Cumulative P&amp;L)
-          </span>
-          <p className="text-[9.5px] text-slate-500 font-mono mt-0.5">Chronological trade performance ledger including brokerage transaction fees</p>
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border-b border-geo-border/40 pb-3 mb-3.5">
+            <div>
+              <span className="text-[10px] font-mono font-bold tracking-widest text-slate-400 uppercase flex items-center gap-1.5">
+                <Calendar size={13} className="text-blue-500" /> Trading Performance Calendar
+              </span>
+              <p className="text-[9.5px] text-slate-500 font-mono mt-0.5">Real-time daily net trading profit and loss ledger grid</p>
+            </div>
+
+            <div className="flex items-center gap-2 bg-slate-950/45 p-1 border border-slate-900 rounded-sm self-start sm:self-auto">
+              <button 
+                onClick={handlePrevMonth}
+                className="p-1 hover:text-white text-slate-400 hover:bg-slate-900 border border-transparent rounded-sm cursor-pointer transition-colors"
+                title="Previous Month"
+              >
+                <ChevronLeft size={14} />
+              </button>
+              <span className="font-display text-[11px] font-bold text-slate-200 uppercase tracking-widest px-2 min-w-[110px] text-center select-none">
+                {selectedMonth.toLocaleDateString(undefined, { month: 'long', year: 'numeric' })}
+              </span>
+              <button 
+                onClick={handleNextMonth}
+                className="p-1 hover:text-white text-slate-400 hover:bg-slate-900 border border-transparent rounded-sm cursor-pointer transition-colors"
+                title="Next Month"
+              >
+                <ChevronRight size={14} />
+              </button>
+            </div>
+          </div>
         </div>
 
-        <div className="my-3 flex-1 flex items-center justify-center min-h-[180px] w-full bg-slate-950/40 border border-slate-900/60 p-2 relative overflow-hidden">
-          {equityData.length === 0 ? (
-            <div className="text-center font-mono py-12 text-slate-550 text-[10px]">
-              No closed trade records logged for equity visualization.
-            </div>
-          ) : (
-            <svg
-              viewBox={`0 0 ${width} ${height}`}
-              className="w-full h-full text-slate-400 overflow-visible"
-              aria-label="Cumulative Net PnL Curve"
-            >
-              {/* horizontal guides */}
-              {equityYTicks.map((tick, i) => {
-                const values = equityData.map((d) => d.cumulative);
-                const minVal = Math.min(0, ...values);
-                const maxVal = Math.max(100, ...values);
-                const yRange = maxVal - minVal || 1;
-                const y = height - padding - ((tick - minVal) / yRange) * (height - 2 * padding);
-                return (
-                  <g key={i} className="opacity-40">
-                    <line
-                      x1={padding}
-                      y1={y}
-                      x2={width - padding}
-                      y2={y}
-                      stroke="#1e293b"
-                      strokeWidth={1}
-                      strokeDasharray="2 3"
-                    />
-                    <text
-                      x={padding - 5}
-                      y={y + 3}
-                      fill="#64748b"
-                      fontSize="8px"
-                      fontFamily="monospace"
-                      textAnchor="end"
-                    >
-                      {formatUSD(tick)}
-                    </text>
-                  </g>
-                );
-              })}
+        {/* Calendar Grid wrapper */}
+        <div className="flex-1 w-full bg-slate-950/20 border border-slate-900/60 p-2.5 rounded-sm relative mb-4">
+          {/* Week headers */}
+          <div className="grid grid-cols-7 gap-1 sm:gap-1.5 mb-1.5 text-center">
+            {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(d => (
+              <span key={d} className="text-[9px] font-mono font-bold text-slate-600 uppercase tracking-wider select-none">{d}</span>
+            ))}
+          </div>
 
-              {/* Zero line reference */}
-              {(() => {
-                const values = equityData.map((d) => d.cumulative);
-                const minVal = Math.min(0, ...values);
-                const maxVal = Math.max(100, ...values);
-                const yRange = maxVal - minVal || 1;
-                const zeroY = height - padding - ((0 - minVal) / yRange) * (height - 2 * padding);
-                if (zeroY >= padding && zeroY <= height - padding) {
-                  return (
-                    <line
-                      x1={padding}
-                      y1={zeroY}
-                      x2={width - padding}
-                      y2={zeroY}
-                      stroke="#ef4444"
-                      strokeWidth={1}
-                      className="opacity-25"
-                    />
-                  );
+          {/* Days Grid */}
+          <div className="grid grid-cols-7 gap-1 sm:gap-1.5">
+            {/* Blank spacer cells for offset */}
+            {Array.from({ length: firstDayIndex }).map((_, idx) => (
+              <div 
+                key={`blank-${idx}`} 
+                className="bg-slate-950/5 border border-transparent min-h-[46px] sm:min-h-[50px]" 
+              />
+            ))}
+
+            {/* Actual day cells */}
+            {Array.from({ length: daysInMonth }).map((_, idx) => {
+              const d = idx + 1;
+              const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+              
+              // Filter closed trades logged on this exact calendar day
+              const dayTrades = entries.filter(e => e.entryDate === dateStr);
+              const totalNetPnl = dayTrades.reduce((sum, e) => {
+                if (e.status === 'open') return sum;
+                return sum + (e.pnl || 0) - (e.fees || 0);
+              }, 0);
+              const tradeCount = dayTrades.length;
+              const hasTrades = tradeCount > 0;
+              
+              let bgClass = "bg-slate-950/25 border-slate-900/40 text-slate-500";
+              if (hasTrades) {
+                if (totalNetPnl > 0) {
+                  bgClass = "bg-emerald-950/25 border-emerald-500/25 text-emerald-300 hover:bg-emerald-900/30";
+                } else if (totalNetPnl < 0) {
+                  bgClass = "bg-rose-950/25 border-rose-500/25 text-rose-300 hover:bg-rose-900/30";
+                } else {
+                  bgClass = "bg-slate-900 border-slate-700/60 text-slate-200 hover:bg-slate-800";
                 }
-                return null;
-              })()}
+              }
 
-              {/* The Line Curve */}
-              {svgPoints && (
-                <>
-                  <polyline
-                    fill="none"
-                    stroke="#3b82f6"
-                    strokeWidth="2.5"
-                    points={svgPoints}
-                    className="drop-shadow-[0_2px_8px_rgba(59,130,246,0.3)]"
-                  />
-                  {/* Scatter plot nodes on hover or highlights */}
-                  {equityData.map((d, idx) => {
-                    const values = equityData.map((item) => item.cumulative);
-                    const minVal = Math.min(0, ...values);
-                    const maxVal = Math.max(100, ...values);
-                    const xRange = equityData.length > 1 ? equityData.length - 1 : 1;
-                    const yRange = maxVal - minVal || 1;
-
-                    const x = padding + (idx / xRange) * (width - 2 * padding);
-                    const y = height - padding - ((d.cumulative - minVal) / yRange) * (height - 2 * padding);
-
-                    return (
-                      <circle
-                        key={idx}
-                        cx={x}
-                        cy={y}
-                        r="3.5"
-                        className="fill-slate-950 stroke-blue-400 hover:r-5 cursor-pointer transition-all duration-150"
-                        strokeWidth="1.5"
-                        id={`node-${idx}`}
-                      >
-                        <title>{`${d.date}: ${formatUSD(d.cumulative)} (Net: ${formatUSD(d.pnl)}) [${d.symbol}]`}</title>
-                      </circle>
-                    );
-                  })}
-                </>
-              )}
-            </svg>
-          )}
-
-          {/* Quick info badges inside SVG */}
-          {equityData.length > 0 && (
-            <div className="absolute bottom-2.5 right-3 bg-geo-bg border border-geo-border py-0.5 px-2 rounded-sm text-[8px] font-mono text-slate-500 flex gap-2">
-              <span>{equityData[0].date}</span>
-              <span>&mdash;</span>
-              <span>{equityData[equityData.length - 1].date}</span>
-            </div>
-          )}
+              return (
+                <div 
+                  key={`day-${d}`}
+                  className={`min-h-[46px] sm:min-h-[50px] p-1 border rounded-xs flex flex-col justify-between text-left transition-all ${bgClass}`}
+                  title={hasTrades ? `${dateStr}: ${formatUSD(totalNetPnl)} (${tradeCount} trade${tradeCount === 1 ? '' : 's'})` : dateStr}
+                >
+                  <span className={`text-[8.5px] font-bold font-mono leading-none ${hasTrades ? 'text-slate-100' : 'text-slate-500'}`}>
+                    {d}
+                  </span>
+                  {hasTrades && (
+                    <div className="flex flex-col text-center w-full mt-0.5 select-none font-mono">
+                      <span className="text-[9px] font-extrabold leading-none tracking-tighter truncate">
+                        {formatCalendarUSD(totalNetPnl)}
+                      </span>
+                      <span className="text-[6.5px] leading-none opacity-70 mt-0.5 font-bold tracking-tight truncate">
+                        {tradeCount} T
+                      </span>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
         </div>
 
-        <div className="text-[9px] font-mono text-slate-550 text-slate-500 uppercase tracking-widest flex justify-between">
-          <span>Timeline Ledger</span>
-          <span>Sample Size: {equityData.length} realized positions</span>
+        {/* Monthly Ledger Summary indicators at the base */}
+        <div className="grid grid-cols-3 gap-2.5 border-t border-geo-border/40 pt-3">
+          <div className="bg-slate-950/30 py-1.5 px-2.5 border border-slate-900 rounded-sm text-left font-mono">
+            <span className="text-[7.5px] text-slate-500 uppercase tracking-wider block font-bold">Month yield</span>
+            <span className={`text-[11px] font-extrabold block mt-0.5 leading-none ${monthlyStats.totalNet >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+              {monthlyStats.totalNet >= 0 ? '+' : ''}{formatUSD(monthlyStats.totalNet)}
+            </span>
+          </div>
+
+          <div className="bg-slate-950/30 py-1.5 px-2.5 border border-slate-900 rounded-sm text-left font-mono">
+            <span className="text-[7.5px] text-slate-500 uppercase tracking-wider block font-bold">Total execution</span>
+            <span className="text-[11.5px] font-extrabold text-slate-300 block mt-0.5 leading-none">
+              {monthlyStats.tradeCount} trades
+            </span>
+          </div>
+
+          <div className="bg-slate-950/30 py-1.5 px-2.5 border border-slate-900 rounded-sm text-left font-mono">
+            <span className="text-[7.5px] text-slate-500 uppercase tracking-wider block font-bold">Accuracy rate</span>
+            <span className="text-[11.5px] font-extrabold text-slate-300 block mt-0.5 leading-none">
+              {monthlyStats.winRate.toFixed(0)}%
+            </span>
+          </div>
         </div>
       </div>
 
