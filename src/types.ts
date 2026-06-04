@@ -31,6 +31,7 @@ export interface TradeEntry {
   stopLoss?: number;
   emotion?: EmotionType;
   closedPrice?: number;
+  updatedAt?: number;
 }
 
 export interface TradeStats {
@@ -55,5 +56,6 @@ export interface CapitalEntry {
   type: 'starting' | 'deposit' | 'withdrawal';
   date: string; // YYYY-MM-DD
   notes: string;
+  updatedAt?: number;
 }
 

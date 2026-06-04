@@ -164,7 +164,7 @@ export default function App() {
       const localCapitalKey = `trades_desk_capital_v2_${activeUser.id}`;
       const rawLocal = localStorage.getItem(localCapitalKey);
       
-      let localCap = [];
+      let localCap: CapitalEntry[] = [];
       if (rawLocal) {
         try {
           localCap = JSON.parse(rawLocal);
@@ -173,36 +173,62 @@ export default function App() {
         }
       }
 
-      if (Array.isArray(localCap) && localCap.length > 0) {
-        const serverIds = new Set(data.map((item: any) => item.id));
-        const missingOnServer = localCap.filter((item: any) => item.id && !serverIds.has(item.id));
+      const delCapKey = `trades_desk_deleted_cap_v2_${activeUser.id}`;
+      const deletedCapIds = new Set<string>(JSON.parse(localStorage.getItem(delCapKey) || '[]'));
 
-        if (missingOnServer.length > 0) {
-          console.log('Restoring capital entries back to server container on the fly', missingOnServer);
-          try {
-            const syncRes = await fetch('/api/capital/sync', {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${currentToken}`
-              },
-              body: JSON.stringify({ capital: [...data, ...missingOnServer] })
-            });
+      // 1. Filter out deleted capital entries
+      const serverCapClean = Array.isArray(data) ? data.filter((item: any) => item.id && !deletedCapIds.has(item.id)) : [];
+      const localCapClean = Array.isArray(localCap) ? localCap.filter((item: any) => item.id && !deletedCapIds.has(item.id)) : [];
 
-            if (syncRes.ok) {
-              const combinedCap = [...data, ...missingOnServer];
-              setCapitalEntries(combinedCap);
-              localStorage.setItem(localCapitalKey, JSON.stringify(combinedCap));
-              return;
-            }
-          } catch (syncErr) {
-            console.warn('Silent background capital restoration failed', syncErr);
+      // 2. Build merged map by comparing updatedAt
+      const mergedMap = new Map<string, CapitalEntry>();
+
+      serverCapClean.forEach((item: CapitalEntry) => {
+        mergedMap.set(item.id, item);
+      });
+
+      localCapClean.forEach((localItem: CapitalEntry) => {
+        const serverItem = mergedMap.get(localItem.id);
+        if (!serverItem) {
+          mergedMap.set(localItem.id, localItem);
+        } else {
+          const serverUpdate = serverItem.updatedAt || 0;
+          const localUpdate = localItem.updatedAt || 0;
+          if (localUpdate > serverUpdate) {
+            mergedMap.set(localItem.id, { ...serverItem, ...localItem });
           }
+        }
+      });
+
+      const reconciledCap = Array.from(mergedMap.values());
+
+      // If reconciledCap differs, sync back
+      const serverIds = serverCapClean.map(s => s.id);
+      const needsSync = reconciledCap.some(item => {
+        if (!serverIds.includes(item.id)) return true;
+        const sEntry = serverCapClean.find((s: any) => s.id === item.id);
+        if (!sEntry) return true;
+        return (item.updatedAt || 0) > (sEntry.updatedAt || 0);
+      }) || (serverCapClean.length !== reconciledCap.length);
+
+      if (needsSync) {
+        console.log('Synchronizing reconciled capital back to server container', reconciledCap);
+        try {
+          await fetch('/api/capital/sync', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${currentToken}`
+            },
+            body: JSON.stringify({ capital: reconciledCap })
+          });
+        } catch (syncErr) {
+          console.warn('Silent capital reconciliation sync failed', syncErr);
         }
       }
 
-      setCapitalEntries(data);
-      localStorage.setItem(localCapitalKey, JSON.stringify(data));
+      setCapitalEntries(reconciledCap);
+      localStorage.setItem(localCapitalKey, JSON.stringify(reconciledCap));
     } catch (e: any) {
       console.warn('Backend connection unavailable for capital, falling back to local cache', e);
       const stored = localStorage.getItem(`trades_desk_capital_v2_${activeUser.id}`);
@@ -222,6 +248,8 @@ export default function App() {
     if (!user?.id) return;
     const isEditing = !!capitalData.id;
     const targetId = capitalData.id;
+    const now = Date.now();
+    const enrichedData = { ...capitalData, updatedAt: now };
 
     try {
       const endpoint = isEditing ? `/api/capital/${targetId}` : '/api/capital';
@@ -232,14 +260,14 @@ export default function App() {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`
         },
-        body: JSON.stringify(capitalData)
+        body: JSON.stringify(enrichedData)
       });
       if (!res.ok) throw new Error('Failed saving capital to server');
       const savedDoc = await res.json();
 
       let updatedList: CapitalEntry[];
       if (isEditing) {
-        updatedList = capitalEntries.map((e) => e.id === targetId ? savedDoc : e);
+        updatedList = capitalEntries.map((e) => e.id === targetId ? { ...e, ...savedDoc } : e);
       } else {
         updatedList = [savedDoc, ...capitalEntries];
       }
@@ -250,7 +278,8 @@ export default function App() {
       const nextId = targetId || `cap-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
       const savedCapital: CapitalEntry = {
         ...capitalData,
-        id: nextId
+        id: nextId,
+        updatedAt: now
       } as CapitalEntry;
 
       const updatedList = isEditing 
@@ -264,6 +293,17 @@ export default function App() {
 
   const handleDeleteCapital = async (id: string) => {
     if (!user?.id) return;
+
+    try {
+      const delCapKey = `trades_desk_deleted_cap_v2_${user.id}`;
+      const deletedCapIds = JSON.parse(localStorage.getItem(delCapKey) || '[]');
+      if (!deletedCapIds.includes(id)) {
+        deletedCapIds.push(id);
+        localStorage.setItem(delCapKey, JSON.stringify(deletedCapIds));
+      }
+    } catch (e) {
+      console.warn('Failed tracking local deletion id list for capital', e);
+    }
 
     try {
       const res = await fetch(`/api/capital/${id}`, {
@@ -348,11 +388,11 @@ export default function App() {
       }
       const data = await res.json();
 
-      // Ephemeral Database Protection: check if client has local records missing on temporary server
+      // Ephemeral Database Protection: check if client has local records missing on temporary server, or has edited/deleted items
       const localKey = `${LOCAL_STORAGE_KEY}_${activeUser.id}`;
       const rawLocal = localStorage.getItem(localKey);
       
-      let localLogs = [];
+      let localLogs: TradeEntry[] = [];
       if (rawLocal) {
         try {
           localLogs = JSON.parse(rawLocal);
@@ -361,39 +401,66 @@ export default function App() {
         }
       }
 
-      if (Array.isArray(localLogs) && localLogs.length > 0) {
-        const serverIds = new Set(data.map((item: any) => item.id));
-        const deletedIds = new Set<string>(JSON.parse(localStorage.getItem(`trades_desk_deleted_v2_${activeUser.id}`) || '[]'));
-        
-        const missingOnServer = localLogs.filter((item: any) => item.id && !serverIds.has(item.id) && !deletedIds.has(item.id));
+      const delKey = `trades_desk_deleted_v2_${activeUser.id}`;
+      const deletedIds = new Set<string>(JSON.parse(localStorage.getItem(delKey) || '[]'));
 
-        if (missingOnServer.length > 0) {
-          console.log('Restoring journal/trade history logs back to server container on the fly', missingOnServer);
-          try {
-            const syncRes = await fetch('/api/logs/sync', {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${currentToken}`
-              },
-              body: JSON.stringify({ logs: [...data, ...missingOnServer] })
-            });
+      // 1. Filter out deleted entries from both backend data and local logs
+      const serverLogsClean = Array.isArray(data) ? data.filter((item: any) => item.id && !deletedIds.has(item.id)) : [];
+      const localLogsClean = Array.isArray(localLogs) ? localLogs.filter((item: any) => item.id && !deletedIds.has(item.id)) : [];
 
-            if (syncRes.ok) {
-              const combinedLogs = [...data, ...missingOnServer];
-              setEntries(combinedLogs);
-              localStorage.setItem(localKey, JSON.stringify(combinedLogs));
-              setIsLoading(false);
-              return;
-            }
-          } catch (syncErr) {
-            console.warn('Silent background log restoration failed', syncErr);
+      // 2. Build a merged map. For logs present in both, compare item.updatedAt
+      const mergedMap = new Map<string, TradeEntry>();
+
+      // Load server entries first
+      serverLogsClean.forEach((item: TradeEntry) => {
+        mergedMap.set(item.id, item);
+      });
+
+      // Override with local entries if local entries are newer (updatedAt is greater) or if they don't exist on server
+      localLogsClean.forEach((localItem: TradeEntry) => {
+        const serverItem = mergedMap.get(localItem.id);
+        if (!serverItem) {
+          mergedMap.set(localItem.id, localItem);
+        } else {
+          const serverUpdate = serverItem.updatedAt || 0;
+          const localUpdate = localItem.updatedAt || 0;
+          if (localUpdate > serverUpdate) {
+            mergedMap.set(localItem.id, { ...serverItem, ...localItem });
           }
+        }
+      });
+
+      const reconciledLogs = Array.from(mergedMap.values());
+
+      // If reconciledLogs differs in content from what the server gave us, we sync back to server
+      const serverIds = serverLogsClean.map(s => s.id);
+      const needsSync = reconciledLogs.some(item => {
+        // If it's not on the server, we need a sync
+        if (!serverIds.includes(item.id)) return true;
+        // Or if it is on the server but our merged attributes have a different/newer updatedAt or fields
+        const sEntry = serverLogsClean.find((s: any) => s.id === item.id);
+        if (!sEntry) return true;
+        return (item.updatedAt || 0) > (sEntry.updatedAt || 0);
+      }) || (serverLogsClean.length !== reconciledLogs.length);
+
+      if (needsSync) {
+        console.log('Synchronizing reconciled journal back to server container', reconciledLogs);
+        try {
+          await fetch('/api/logs/sync', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${currentToken}`
+            },
+            body: JSON.stringify({ logs: reconciledLogs })
+          });
+        } catch (syncErr) {
+          console.warn('Silent logs reconciliation sync failed', syncErr);
         }
       }
 
-      setEntries(data);
-      localStorage.setItem(localKey, JSON.stringify(data));
+      setEntries(reconciledLogs);
+      localStorage.setItem(localKey, JSON.stringify(reconciledLogs));
     } catch (e: any) {
       console.warn('Backend connection unavailable, falling back to local storage cache', e);
       setApiError('Connected in Offline Mode');
@@ -474,6 +541,8 @@ export default function App() {
   const handleSaveEntry = async (entryData: Omit<TradeEntry, 'id'> & { id?: string }) => {
     const isEditing = !!entryData.id;
     const targetId = entryData.id;
+    const now = Date.now();
+    const enrichedData = { ...entryData, updatedAt: now };
 
     try {
       if (isEditing) {
@@ -483,11 +552,11 @@ export default function App() {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${token}`
           },
-          body: JSON.stringify(entryData)
+          body: JSON.stringify(enrichedData)
         });
         if (!res.ok) throw new Error('Failed updating log on server');
         const updatedDoc = await res.json();
-        const updatedList = entries.map((e) => (e.id === targetId ? updatedDoc : e));
+        const updatedList = entries.map((e) => (e.id === targetId ? { ...e, ...updatedDoc } : e));
         setEntries(updatedList);
         localStorage.setItem(`${LOCAL_STORAGE_KEY}_${user?.id}`, JSON.stringify(updatedList));
       } else {
@@ -497,7 +566,7 @@ export default function App() {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${token}`
           },
-          body: JSON.stringify(entryData)
+          body: JSON.stringify(enrichedData)
         });
         if (!res.ok) throw new Error('Failed saving log to server');
         const savedDoc = await res.json();
@@ -510,7 +579,8 @@ export default function App() {
       const nextId = targetId || `trade-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
       const savedEntry: TradeEntry = {
         ...entryData,
-        id: nextId
+        id: nextId,
+        updatedAt: now
       } as TradeEntry;
 
       const updatedList = isEditing 
