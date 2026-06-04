@@ -32,10 +32,176 @@ if (!fs.existsSync(DATA_DIR)) {
 // Default initial Seed entries
 const SEED_ENTRIES: any[] = [];
 
+// --- FIRESTORE PERSISTENT DRIVER ---
+const PROJECT_ID = process.env.VITE_FIREBASE_PROJECT_ID || process.env.FIREBASE_PROJECT_ID;
+const API_KEY = process.env.VITE_FIREBASE_API_KEY || process.env.FIREBASE_API_KEY;
+
+const isFirestoreEnabled = !!(PROJECT_ID && API_KEY && PROJECT_ID !== "your-project-id" && API_KEY !== "your-api-key");
+
+if (isFirestoreEnabled) {
+  console.log(`[Firestore Engine] Connected to Firebase Project "${PROJECT_ID}". Real-time cloud persistence active!`);
+} else {
+  console.log(`[Local File Engine] Local ephemeral file storage active in "${DATA_DIR}". Any deployments on stateless hosts like Vercel will reset data between session recycles.`);
+}
+
+function sanitizeDocId(id: string): string {
+  return id.replace(/[^a-zA-Z0-9_\-]/g, "_");
+}
+
+function hashTokenToId(token: string): string {
+  return crypto.createHash("md5").update(token).digest("hex");
+}
+
+async function fetchAllDocuments(collection: string): Promise<any[]> {
+  try {
+    const url = `https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/(default)/documents/${collection}?key=${API_KEY}&pageSize=1000`;
+    const res = await fetch(url);
+    if (!res.ok) {
+      if (res.status === 404) return [];
+      const errText = await res.text();
+      console.error(`[Firestore REST] Error listing ${collection}: ${res.status}`, errText);
+      return [];
+    }
+    const data = await res.json();
+    if (!data.documents) return [];
+    return data.documents.map((doc: any) => {
+      if (doc && doc.fields && doc.fields.data && doc.fields.data.stringValue) {
+        try {
+          return JSON.parse(doc.fields.data.stringValue);
+        } catch {
+          return null;
+        }
+      }
+      return null;
+    }).filter(Boolean);
+  } catch (err) {
+    console.error(`[Firestore REST] Fetch error on listing ${collection}`, err);
+    return [];
+  }
+}
+
+async function saveDocument(collection: string, id: string, val: any): Promise<boolean> {
+  try {
+    const safeDocId = sanitizeDocId(id);
+    const url = `https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/(default)/documents/${collection}/${safeDocId}?key=${API_KEY}`;
+    const payload = {
+      fields: {
+        data: { stringValue: JSON.stringify(val) },
+        ownerId: { stringValue: val.ownerId || val.userId || "" }
+      }
+    };
+    const res = await fetch(url, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) {
+      const errText = await res.text();
+      console.error(`[Firestore REST] Patch failed on ${collection}/${safeDocId}: ${res.status}`, errText);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.error(`[Firestore REST] Fetch error patching ${collection}/${id}`, err);
+    return false;
+  }
+}
+
+async function deleteDocument(collection: string, id: string): Promise<boolean> {
+  try {
+    const safeDocId = sanitizeDocId(id);
+    const url = `https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/(default)/documents/${collection}/${safeDocId}?key=${API_KEY}`;
+    const res = await fetch(url, {
+      method: "DELETE"
+    });
+    if (!res.ok) {
+      if (res.status === 404) return true;
+      const errText = await res.text();
+      console.error(`[Firestore REST] Delete failed on ${collection}/${safeDocId}: ${res.status}`, errText);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.error(`[Firestore REST] Fetch error deleting ${collection}/${id}`, err);
+    return false;
+  }
+}
+
+async function deleteLogsForUser(userId: string) {
+  try {
+    const url = `https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/(default)/documents/logs?key=${API_KEY}&pageSize=1000`;
+    const res = await fetch(url);
+    if (!res.ok) return;
+    const data = await res.json();
+    if (!data.documents) return;
+    const toDelete = data.documents.filter((doc: any) => {
+      return doc.fields && doc.fields.ownerId && doc.fields.ownerId.stringValue === userId;
+    });
+    const promises = toDelete.map((doc: any) => {
+      const parts = doc.name.split("/");
+      const id = parts[parts.length - 1];
+      return deleteDocument("logs", id);
+    });
+    await Promise.all(promises);
+  } catch (err) {
+    console.error("Failed to delete logs for user in Firestore", err);
+  }
+}
+
+async function readUserById(userId: string): Promise<any | null> {
+  if (isFirestoreEnabled) {
+    const safeId = sanitizeDocId(userId);
+    try {
+      const url = `https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/(default)/documents/users/${safeId}?key=${API_KEY}`;
+      const res = await fetch(url);
+      if (!res.ok) return null;
+      const doc = await res.json();
+      if (doc && doc.fields && doc.fields.data && doc.fields.data.stringValue) {
+        return JSON.parse(doc.fields.data.stringValue);
+      }
+    } catch (e) {
+      console.error("Firestore get user by ID failed", e);
+    }
+    return null;
+  }
+  const users = await readUsers();
+  return users.find((u: any) => u.id === userId) || null;
+}
+
+async function readSession(token: string): Promise<any | null> {
+  if (isFirestoreEnabled) {
+    const hashId = hashTokenToId(token);
+    try {
+      const url = `https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/(default)/documents/sessions/${hashId}?key=${API_KEY}`;
+      const res = await fetch(url);
+      if (!res.ok) return null;
+      const doc = await res.json();
+      if (doc && doc.fields && doc.fields.data && doc.fields.data.stringValue) {
+        return JSON.parse(doc.fields.data.stringValue);
+      }
+    } catch (e) {
+      console.error("Firestore get session failed", e);
+    }
+    return null;
+  }
+  const sessions = await readSessions();
+  return sessions[token] || null;
+}
+
+async function writeSession(token: string, sessionObj: any) {
+  if (isFirestoreEnabled) {
+    const hashId = hashTokenToId(token);
+    await saveDocument("sessions", hashId, { ...sessionObj, token });
+    return;
+  }
+}
+
 // Read/Write Logs helper
-function readLogs(): any[] {
+async function readLogs(): Promise<any[]> {
+  if (isFirestoreEnabled) {
+    return await fetchAllDocuments("logs");
+  }
   if (!fs.existsSync(DATA_FILE)) {
-    // Attempt to seed from standard pre-committed portfolio file if available in the bundle
     const bundleFile = path.join(process.cwd(), "data", "logs.json");
     if (fs.existsSync(bundleFile)) {
       try {
@@ -58,14 +224,21 @@ function readLogs(): any[] {
   }
 }
 
-function writeLogs(logs: any[]) {
+async function writeLogs(logs: any[]) {
+  if (isFirestoreEnabled) {
+    const promises = logs.map(log => saveDocument("logs", log.id, log));
+    await Promise.all(promises);
+    return;
+  }
   fs.writeFileSync(DATA_FILE, JSON.stringify(logs, null, 2), "utf-8");
 }
 
 // Read/Write Users helper
-function readUsers(): any[] {
+async function readUsers(): Promise<any[]> {
+  if (isFirestoreEnabled) {
+    return await fetchAllDocuments("users");
+  }
   if (!fs.existsSync(USERS_FILE)) {
-    // Attempt to seed from standard pre-committed users file if available in the bundle
     const bundleFile = path.join(process.cwd(), "data", "users.json");
     if (fs.existsSync(bundleFile)) {
       try {
@@ -88,14 +261,21 @@ function readUsers(): any[] {
   }
 }
 
-function writeUsers(users: any[]) {
+async function writeUsers(users: any[]) {
+  if (isFirestoreEnabled) {
+    const promises = users.map(user => saveDocument("users", user.id, user));
+    await Promise.all(promises);
+    return;
+  }
   fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2), "utf-8");
 }
 
 // Read/Write Capital helper
-function readCapital(): any[] {
+async function readCapital(): Promise<any[]> {
+  if (isFirestoreEnabled) {
+    return await fetchAllDocuments("capital");
+  }
   if (!fs.existsSync(CAPITAL_FILE)) {
-    // Attempt to seed from standard pre-committed capital file if available in the bundle
     const bundleFile = path.join(process.cwd(), "data", "capital.json");
     if (fs.existsSync(bundleFile)) {
       try {
@@ -118,12 +298,27 @@ function readCapital(): any[] {
   }
 }
 
-function writeCapital(capital: any[]) {
+async function writeCapital(capital: any[]) {
+  if (isFirestoreEnabled) {
+    const promises = capital.map(item => saveDocument("capital", item.id, item));
+    await Promise.all(promises);
+    return;
+  }
   fs.writeFileSync(CAPITAL_FILE, JSON.stringify(capital, null, 2), "utf-8");
 }
 
 // Read/Write Sessions helper
-function readSessions(): { [token: string]: { userId: string; username: string; expiresAt: number } } {
+async function readSessions(): Promise<{ [token: string]: { userId: string; username: string; expiresAt: number } }> {
+  if (isFirestoreEnabled) {
+    const list = await fetchAllDocuments("sessions");
+    const map: any = {};
+    list.forEach((item: any) => {
+      if (item && item.token) {
+        map[item.token] = item;
+      }
+    });
+    return map;
+  }
   if (!fs.existsSync(SESSIONS_FILE)) {
     fs.writeFileSync(SESSIONS_FILE, JSON.stringify({}, null, 2), "utf-8");
     return {};
@@ -137,7 +332,12 @@ function readSessions(): { [token: string]: { userId: string; username: string; 
   }
 }
 
-function writeSessions(sessions: any) {
+async function writeSessions(sessions: any) {
+  if (isFirestoreEnabled) {
+    const promises = Object.keys(sessions).map(token => saveDocument("sessions", hashTokenToId(token), sessions[token]));
+    await Promise.all(promises);
+    return;
+  }
   fs.writeFileSync(SESSIONS_FILE, JSON.stringify(sessions, null, 2), "utf-8");
 }
 
@@ -180,48 +380,59 @@ function verifyStatelessToken(token: string): { userId: string; username: string
 }
 
 // Authentication middleware
-function authenticateToken(req: any, res: any, next: any) {
-  const authHeader = req.headers["authorization"];
-  const token = authHeader && authHeader.split(" ")[1];
+async function authenticateToken(req: any, res: any, next: any) {
+  try {
+    const authHeader = req.headers["authorization"];
+    const token = authHeader && authHeader.split(" ")[1];
 
-  if (!token) {
-    return res.status(401).json({ error: "Access token required" });
-  }
-
-  // 1. Try checking sessions store (Legacy/Cache)
-  let userPayload: { id: string; username: string } | null = null;
-  const sessions = readSessions();
-  const session = sessions[token];
-
-  if (session && session.expiresAt >= Date.now()) {
-    userPayload = { id: session.userId, username: session.username };
-  } else {
-    // 2. Fallback to stateless JWT token signature check
-    const verified = verifyStatelessToken(token);
-    if (verified) {
-      userPayload = { id: verified.userId, username: verified.username };
+    if (!token) {
+      return res.status(401).json({ error: "Access token required" });
     }
-  }
 
-  if (!userPayload) {
-    return res.status(401).json({ error: "Session invalid or expired" });
-  }
+    let userPayload: { id: string; username: string } | null = null;
+    
+    if (isFirestoreEnabled) {
+      const session = await readSession(token);
+      if (session && session.expiresAt >= Date.now()) {
+        userPayload = { id: session.userId, username: session.username };
+      }
+    } else {
+      const sessions = await readSessions();
+      const session = sessions[token];
+      if (session && session.expiresAt >= Date.now()) {
+        userPayload = { id: session.userId, username: session.username };
+      }
+    }
 
-  req.user = userPayload;
-  next();
+    if (!userPayload) {
+      const verified = verifyStatelessToken(token);
+      if (verified) {
+        userPayload = { id: verified.userId, username: verified.username };
+      }
+    }
+
+    if (!userPayload) {
+      return res.status(401).json({ error: "Session invalid or expired" });
+    }
+
+    req.user = userPayload;
+    next();
+  } catch (err) {
+    return res.status(500).json({ error: "Internal authentication error" });
+  }
 }
 
 // ==================== AUTHENTICATION API ROUTES ====================
 
 // POST: Sync user accounts database from client localStorage (Serverless Auto-Recovery)
-app.post("/api/auth/sync", (req, res) => {
+app.post("/api/auth/sync", async (req, res) => {
   try {
     const { users: localUsers } = req.body;
     if (!Array.isArray(localUsers)) {
       return res.status(400).json({ error: "Invalid sync request format" });
     }
 
-    const currentUsers = readUsers();
+    const currentUsers = await readUsers();
     let updatedCount = 0;
 
     for (const u of localUsers) {
@@ -229,19 +440,23 @@ app.post("/api/auth/sync", (req, res) => {
       const normalized = u.username.trim().toLowerCase();
       const exists = currentUsers.some((curr: any) => curr.username === normalized || curr.id === u.id);
       if (!exists) {
-        currentUsers.push({
+        const newUser = {
           id: u.id,
           username: normalized,
           passwordHash: u.passwordHash,
           salt: u.salt,
           createdAt: u.createdAt || new Date().toISOString()
-        });
+        };
+        currentUsers.push(newUser);
+        if (isFirestoreEnabled) {
+          await saveDocument("users", u.id, newUser);
+        }
         updatedCount++;
       }
     }
 
-    if (updatedCount > 0) {
-      writeUsers(currentUsers);
+    if (!isFirestoreEnabled && updatedCount > 0) {
+      await writeUsers(currentUsers);
     }
 
     res.json({ success: true, syncedUsersCount: updatedCount });
@@ -251,7 +466,7 @@ app.post("/api/auth/sync", (req, res) => {
 });
 
 // POST: Sign Up
-app.post("/api/auth/signup", (req, res) => {
+app.post("/api/auth/signup", async (req, res) => {
   try {
     const { username, password } = req.body;
     if (!username || !password || typeof username !== "string" || typeof password !== "string") {
@@ -266,7 +481,7 @@ app.post("/api/auth/signup", (req, res) => {
       return res.status(400).json({ error: "Password must be at least 4 characters" });
     }
 
-    const users = readUsers();
+    const users = await readUsers();
     const existingUser = users.find((u: any) => u.username === trimmedUser);
     if (existingUser) {
       return res.status(400).json({ error: "Username already taken" });
@@ -286,32 +501,48 @@ app.post("/api/auth/signup", (req, res) => {
       createdAt: new Date().toISOString()
     };
 
-    users.push(newUser);
-    writeUsers(users);
+    if (isFirestoreEnabled) {
+      await saveDocument("users", userId, newUser);
+    } else {
+      users.push(newUser);
+      await writeUsers(users);
+    }
 
     // One-time pre-load seed entries for this brand new user inside the backend logs storage!
     try {
-      const logs = readLogs();
+      const logs = await readLogs();
       const userSeeds = SEED_ENTRIES.map((entry) => ({
         ...entry,
         id: `trade-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
         ownerId: userId
       }));
-      const updatedLogs = [...userSeeds, ...logs];
-      writeLogs(updatedLogs);
+      if (isFirestoreEnabled) {
+        for (const seed of userSeeds) {
+          await saveDocument("logs", seed.id, seed);
+        }
+      } else {
+        const updatedLogs = [...userSeeds, ...logs];
+        await writeLogs(updatedLogs);
+      }
     } catch (seedErr) {
       console.error("Failed to seed initial user logs on signup", seedErr);
     }
 
     // Create session
     const token = generateToken(userId, trimmedUser);
-    const sessions = readSessions();
-    sessions[token] = {
+    const sessionObj = {
       userId,
       username: trimmedUser,
       expiresAt: Date.now() + 1000 * 60 * 60 * 24 * 7 // 7 days expiration
     };
-    writeSessions(sessions);
+
+    if (isFirestoreEnabled) {
+      await writeSession(token, sessionObj);
+    } else {
+      const sessions = await readSessions();
+      sessions[token] = sessionObj;
+      await writeSessions(sessions);
+    }
 
     res.status(201).json({
       token,
@@ -324,7 +555,7 @@ app.post("/api/auth/signup", (req, res) => {
 });
 
 // POST: Sign In
-app.post("/api/auth/login", (req, res) => {
+app.post("/api/auth/login", async (req, res) => {
   try {
     const { username, password } = req.body;
     if (!username || !password) {
@@ -332,8 +563,8 @@ app.post("/api/auth/login", (req, res) => {
     }
 
     const trimmedUser = username.trim().toLowerCase();
-    const users = readUsers();
-    let user = users.find((u: any) => u.username === trimmedUser);
+    const userId = `user-${trimmedUser}`;
+    const user = await readUserById(userId);
 
     // Dynamic Serverless Auto-Recovery: if user doesn't exist but has signed in before on stateless client,
     // we can dynamically register of sign-in, but since we cannot recover their raw password, 
@@ -349,13 +580,19 @@ app.post("/api/auth/login", (req, res) => {
 
     // Generate stateless token
     const token = generateToken(user.id, user.username);
-    const sessions = readSessions();
-    sessions[token] = {
+    const sessionObj = {
       userId: user.id,
       username: user.username,
       expiresAt: Date.now() + 1000 * 60 * 60 * 24 * 7 // 7 days expiration
     };
-    writeSessions(sessions);
+
+    if (isFirestoreEnabled) {
+      await writeSession(token, sessionObj);
+    } else {
+      const sessions = await readSessions();
+      sessions[token] = sessionObj;
+      await writeSessions(sessions);
+    }
 
     res.json({
       token,
@@ -368,77 +605,100 @@ app.post("/api/auth/login", (req, res) => {
 });
 
 // GET: Validate session / Get user profile
-app.get("/api/auth/me", (req, res) => {
-  const authHeader = req.headers["authorization"];
-  const token = authHeader && authHeader.split(" ")[1];
+app.get("/api/auth/me", async (req, res) => {
+  try {
+    const authHeader = req.headers["authorization"];
+    const token = authHeader && authHeader.split(" ")[1];
 
-  if (!token) {
-    return res.status(401).json({ error: "Unauthorized" });
-  }
-
-  // 1. Check sessions
-  let userPayload: { id: string; username: string } | null = null;
-  const sessions = readSessions();
-  const session = sessions[token];
-
-  if (session && session.expiresAt >= Date.now()) {
-    userPayload = { id: session.userId, username: session.username };
-  } else {
-    // 2. Fallback to stateless JWT-style verification
-    const verified = verifyStatelessToken(token);
-    if (verified) {
-      userPayload = { id: verified.userId, username: verified.username };
+    if (!token) {
+      return res.status(401).json({ error: "Unauthorized" });
     }
-  }
 
-  if (!userPayload) {
-    return res.status(401).json({ error: "Session invalid or expired" });
-  }
+    // 1. Check sessions
+    let userPayload: { id: string; username: string } | null = null;
+    if (isFirestoreEnabled) {
+      const session = await readSession(token);
+      if (session && session.expiresAt >= Date.now()) {
+        userPayload = { id: session.userId, username: session.username };
+      }
+    } else {
+      const sessions = await readSessions();
+      const session = sessions[token];
+      if (session && session.expiresAt >= Date.now()) {
+        userPayload = { id: session.userId, username: session.username };
+      }
+    }
 
-  res.json({
-    user: userPayload
-  });
+    if (!userPayload) {
+      // 2. Fallback to stateless JWT-style verification
+      const verified = verifyStatelessToken(token);
+      if (verified) {
+        userPayload = { id: verified.userId, username: verified.username };
+      }
+    }
+
+    if (!userPayload) {
+      return res.status(401).json({ error: "Session invalid or expired" });
+    }
+
+    res.json({
+      user: userPayload
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Failed to get auth details" });
+  }
 });
 
 // POST: Log out
-app.post("/api/auth/logout", (req, res) => {
-  const authHeader = req.headers["authorization"];
-  const token = authHeader && authHeader.split(" ")[1];
+app.post("/api/auth/logout", async (req, res) => {
+  try {
+    const authHeader = req.headers["authorization"];
+    const token = authHeader && authHeader.split(" ")[1];
 
-  if (token) {
-    const sessions = readSessions();
-    if (sessions[token]) {
-      delete sessions[token];
-      writeSessions(sessions);
+    if (token) {
+      if (isFirestoreEnabled) {
+        await deleteDocument("sessions", hashTokenToId(token));
+      } else {
+        const sessions = await readSessions();
+        if (sessions[token]) {
+          delete sessions[token];
+          await writeSessions(sessions);
+        }
+      }
     }
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Failed to logout" });
   }
-  res.json({ success: true });
 });
 
 // ==================== LOGS API ROUTES (SCOPED TO AUTHENTICATED USER) ====================
 
 // POST: Sync/Restore entire categories of logs from the client's localStorage (Serverless Auto-Recovery)
-app.post("/api/logs/sync", authenticateToken, (req: any, res) => {
+app.post("/api/logs/sync", authenticateToken, async (req: any, res) => {
   try {
     const { logs: clientLogs } = req.body;
     if (!Array.isArray(clientLogs)) {
       return res.status(400).json({ error: "Invalid logs sync request format" });
     }
 
-    const serverLogs = readLogs();
-    
-    // Filter out existing server logs belonging to the current user
-    const otherUsersLogs = serverLogs.filter((item: any) => item.ownerId !== req.user.id);
-
-    // Enforce correct ownerId of the current user on all incoming logs to make it safe
     const verifiedClientLogs = clientLogs.map((item: any) => ({
       ...item,
       ownerId: req.user.id
     }));
 
-    // Recombine and write
-    const combined = [...verifiedClientLogs, ...otherUsersLogs];
-    writeLogs(combined);
+    if (isFirestoreEnabled) {
+      for (const log of verifiedClientLogs) {
+        await saveDocument("logs", log.id, log);
+      }
+    } else {
+      const serverLogs = await readLogs();
+      // Filter out existing server logs belonging to the current user
+      const otherUsersLogs = serverLogs.filter((item: any) => item.ownerId !== req.user.id);
+      // Recombine and write
+      const combined = [...verifiedClientLogs, ...otherUsersLogs];
+      await writeLogs(combined);
+    }
 
     res.json({ success: true, syncedLogsCount: verifiedClientLogs.length });
   } catch (e: any) {
@@ -447,9 +707,9 @@ app.post("/api/logs/sync", authenticateToken, (req: any, res) => {
 });
 
 // API logs retrieval
-app.get("/api/logs", authenticateToken, (req: any, res) => {
+app.get("/api/logs", authenticateToken, async (req: any, res) => {
   try {
-    const logs = readLogs();
+    const logs = await readLogs();
     const userLogs = logs.filter((log: any) => log.ownerId === req.user.id);
     res.json(userLogs);
   } catch (e: any) {
@@ -458,15 +718,19 @@ app.get("/api/logs", authenticateToken, (req: any, res) => {
 });
 
 // Create log entry
-app.post("/api/logs", authenticateToken, (req: any, res) => {
+app.post("/api/logs", authenticateToken, async (req: any, res) => {
   try {
     const newEntry = req.body;
     newEntry.id = `trade-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
     newEntry.ownerId = req.user.id; // Assign owner explicitly
 
-    const logs = readLogs();
-    const updated = [newEntry, ...logs];
-    writeLogs(updated);
+    if (isFirestoreEnabled) {
+      await saveDocument("logs", newEntry.id, newEntry);
+    } else {
+      const logs = await readLogs();
+      const updated = [newEntry, ...logs];
+      await writeLogs(updated);
+    }
     res.status(201).json(newEntry);
   } catch (e: any) {
     res.status(500).json({ error: e.message || "Failed to create log" });
@@ -474,11 +738,11 @@ app.post("/api/logs", authenticateToken, (req: any, res) => {
 });
 
 // Update log entry
-app.put("/api/logs/:id", authenticateToken, (req: any, res) => {
+app.put("/api/logs/:id", authenticateToken, async (req: any, res) => {
   try {
     const { id } = req.params;
     const updatedEntry = req.body;
-    const logs = readLogs();
+    const logs = await readLogs();
     
     const index = logs.findIndex((item: any) => item.id === id);
     if (index === -1) {
@@ -490,19 +754,24 @@ app.put("/api/logs/:id", authenticateToken, (req: any, res) => {
       return res.status(403).json({ error: "Access denied to compile modifications on this resource" });
     }
 
-    logs[index] = { ...logs[index], ...updatedEntry, id, ownerId: req.user.id }; // Maintain same ID & ownerId
-    writeLogs(logs);
-    res.json(logs[index]);
+    const finalEntry = { ...logs[index], ...updatedEntry, id, ownerId: req.user.id }; // Maintain same ID & ownerId
+    if (isFirestoreEnabled) {
+      await saveDocument("logs", id, finalEntry);
+    } else {
+      logs[index] = finalEntry;
+      await writeLogs(logs);
+    }
+    res.json(finalEntry);
   } catch (e: any) {
     res.status(500).json({ error: e.message || "Failed to update log" });
   }
 });
 
 // Delete log entry
-app.delete("/api/logs/:id", authenticateToken, (req: any, res) => {
+app.delete("/api/logs/:id", authenticateToken, async (req: any, res) => {
   try {
     const { id } = req.params;
-    const logs = readLogs();
+    const logs = await readLogs();
     const index = logs.findIndex((item: any) => item.id === id);
     
     if (index === -1) {
@@ -514,8 +783,12 @@ app.delete("/api/logs/:id", authenticateToken, (req: any, res) => {
       return res.status(403).json({ error: "Access denied to compile deletion on this resource" });
     }
 
-    const filtered = logs.filter((item: any) => item.id !== id);
-    writeLogs(filtered);
+    if (isFirestoreEnabled) {
+      await deleteDocument("logs", id);
+    } else {
+      const filtered = logs.filter((item: any) => item.id !== id);
+      await writeLogs(filtered);
+    }
     res.json({ success: true, deletedId: id });
   } catch (e: any) {
     res.status(500).json({ error: e.message || "Failed to delete log" });
@@ -523,12 +796,15 @@ app.delete("/api/logs/:id", authenticateToken, (req: any, res) => {
 });
 
 // Reset database logs for the current user only
-app.post("/api/logs/reset", authenticateToken, (req: any, res) => {
+app.post("/api/logs/reset", authenticateToken, async (req: any, res) => {
   try {
-    const logs = readLogs();
-    // Keep other users' logs, but filter out current user's logs
-    const filtered = logs.filter((item: any) => item.ownerId !== req.user.id);
-    writeLogs(filtered);
+    if (isFirestoreEnabled) {
+      await deleteLogsForUser(req.user.id);
+    } else {
+      const logs = await readLogs();
+      const filtered = logs.filter((item: any) => item.ownerId !== req.user.id);
+      await writeLogs(filtered);
+    }
     res.json({ success: true });
   } catch (e: any) {
     res.status(500).json({ error: e.message || "Failed to reset database logs" });
@@ -538,27 +814,30 @@ app.post("/api/logs/reset", authenticateToken, (req: any, res) => {
 // ==================== CAPITAL API ROUTES (SCOPED TO AUTHENTICATED USER) ====================
 
 // POST: Sync/Restore entire categories of capital entries from the client's localStorage (Serverless Auto-Recovery)
-app.post("/api/capital/sync", authenticateToken, (req: any, res) => {
+app.post("/api/capital/sync", authenticateToken, async (req: any, res) => {
   try {
     const { capital: clientCapital } = req.body;
     if (!Array.isArray(clientCapital)) {
       return res.status(400).json({ error: "Invalid capital sync request format" });
     }
 
-    const serverCapital = readCapital();
-    
-    // Filter out existing server capital belonging to the current user
-    const otherUsersCapital = serverCapital.filter((item: any) => item.ownerId !== req.user.id);
-
-    // Enforce correct ownerId of the current user on all incoming capital to make it safe
     const verifiedClientCapital = clientCapital.map((item: any) => ({
       ...item,
       ownerId: req.user.id
     }));
 
-    // Recombine and write
-    const combined = [...verifiedClientCapital, ...otherUsersCapital];
-    writeCapital(combined);
+    if (isFirestoreEnabled) {
+      for (const cap of verifiedClientCapital) {
+        await saveDocument("capital", cap.id, cap);
+      }
+    } else {
+      const serverCapital = await readCapital();
+      // Filter out existing server capital belonging to the current user
+      const otherUsersCapital = serverCapital.filter((item: any) => item.ownerId !== req.user.id);
+      // Recombine and write
+      const combined = [...verifiedClientCapital, ...otherUsersCapital];
+      await writeCapital(combined);
+    }
 
     res.json({ success: true, syncedCapitalCount: verifiedClientCapital.length });
   } catch (e: any) {
@@ -567,9 +846,9 @@ app.post("/api/capital/sync", authenticateToken, (req: any, res) => {
 });
 
 // API capital retrieval
-app.get("/api/capital", authenticateToken, (req: any, res) => {
+app.get("/api/capital", authenticateToken, async (req: any, res) => {
   try {
-    const capital = readCapital();
+    const capital = await readCapital();
     const userCapital = capital.filter((item: any) => item.ownerId === req.user.id);
     res.json(userCapital);
   } catch (e: any) {
@@ -578,15 +857,19 @@ app.get("/api/capital", authenticateToken, (req: any, res) => {
 });
 
 // Create capital entry
-app.post("/api/capital", authenticateToken, (req: any, res) => {
+app.post("/api/capital", authenticateToken, async (req: any, res) => {
   try {
     const newEntry = req.body;
     newEntry.id = `cap-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
     newEntry.ownerId = req.user.id; // Assign owner explicitly
 
-    const capital = readCapital();
-    const updated = [newEntry, ...capital];
-    writeCapital(updated);
+    if (isFirestoreEnabled) {
+      await saveDocument("capital", newEntry.id, newEntry);
+    } else {
+      const capital = await readCapital();
+      const updated = [newEntry, ...capital];
+      await writeCapital(updated);
+    }
     res.status(201).json(newEntry);
   } catch (e: any) {
     res.status(500).json({ error: e.message || "Failed to create capital entry" });
@@ -594,11 +877,11 @@ app.post("/api/capital", authenticateToken, (req: any, res) => {
 });
 
 // Update capital entry
-app.put("/api/capital/:id", authenticateToken, (req: any, res) => {
+app.put("/api/capital/:id", authenticateToken, async (req: any, res) => {
   try {
     const { id } = req.params;
     const updatedEntry = req.body;
-    const capital = readCapital();
+    const capital = await readCapital();
     
     const index = capital.findIndex((item: any) => item.id === id);
     if (index === -1) {
@@ -610,19 +893,24 @@ app.put("/api/capital/:id", authenticateToken, (req: any, res) => {
       return res.status(403).json({ error: "Access denied to compile modifications on this resource" });
     }
 
-    capital[index] = { ...capital[index], ...updatedEntry, id, ownerId: req.user.id }; // Maintain same ID & ownerId
-    writeCapital(capital);
-    res.json(capital[index]);
+    const finalEntry = { ...capital[index], ...updatedEntry, id, ownerId: req.user.id }; // Maintain same ID & ownerId
+    if (isFirestoreEnabled) {
+      await saveDocument("capital", id, finalEntry);
+    } else {
+      capital[index] = finalEntry;
+      await writeCapital(capital);
+    }
+    res.json(finalEntry);
   } catch (e: any) {
     res.status(500).json({ error: e.message || "Failed to update capital entry" });
   }
 });
 
 // Delete capital entry
-app.delete("/api/capital/:id", authenticateToken, (req: any, res) => {
+app.delete("/api/capital/:id", authenticateToken, async (req: any, res) => {
   try {
     const { id } = req.params;
-    const capital = readCapital();
+    const capital = await readCapital();
     const index = capital.findIndex((item: any) => item.id === id);
     
     if (index === -1) {
@@ -634,8 +922,12 @@ app.delete("/api/capital/:id", authenticateToken, (req: any, res) => {
       return res.status(403).json({ error: "Access denied to compile deletion on this resource" });
     }
 
-    const filtered = capital.filter((item: any) => item.id !== id);
-    writeCapital(filtered);
+    if (isFirestoreEnabled) {
+      await deleteDocument("capital", id);
+    } else {
+      const filtered = capital.filter((item: any) => item.id !== id);
+      await writeCapital(filtered);
+    }
     res.json({ success: true, deletedId: id });
   } catch (e: any) {
     res.status(500).json({ error: e.message || "Failed to delete capital entry" });
